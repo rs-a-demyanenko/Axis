@@ -1,0 +1,12 @@
+{
+  "name": "Axis",
+  "version": "0.1.0",
+  "description": "Encoder feedback axis controller with cascaded position/velocity control, homing and limits",
+  "keywords": ["motor", "encoder", "pid", "axis", "esp32"],
+  "frameworks": "arduino",
+  "platforms": "*",
+  "repository": {"type": "git", "url": "https://github.com/rs-a-demyanenko/Axis.git"},
+  "dependencies": {"gyverlibs/GyverMotor2": "*"},
+  "build": {"includeDir": "src", "srcDir": "src"}
+}
+

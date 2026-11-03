@@ -1,0 +1,33 @@
+name: Axis checks
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/run_tests.py --sanitize
+      - run: python3 tests/run_tests.py --no-motor-accel
+
+  arduino:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: avr
+            core: arduino:avr@1.8.6
+          - target: esp32
+            core: esp32:esp32@3.3.2
+          - target: esp32s3
+            core: esp32:esp32@3.3.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - run: arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - run: arduino-cli core install ${{ matrix.core }} --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - run: python3 tests/compile_examples.py --target ${{ matrix.target }}

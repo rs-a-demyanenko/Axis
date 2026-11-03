@@ -1,0 +1,17 @@
+Axis	KEYWORD1
+Quadrature	KEYWORD1
+home	KEYWORD2
+moveTo	KEYWORD2
+moveBy	KEYWORD2
+moveToAngle	KEYWORD2
+jog	KEYWORD2
+tick	KEYWORD2
+stop	KEYWORD2
+disable	KEYWORD2
+brake	KEYWORD2
+isHomed	KEYWORD2
+inPosition	KEYWORD2
+recoverFromLimit	KEYWORD2
+setWorkPosition	KEYWORD2
+clearFault	KEYWORD2
+snapshot	KEYWORD2

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "arduino-project-builder": {
+      "source": "wedsamuel1230/embedded-engineering-skills",
+      "sourceType": "github",
+      "skillPath": "skills/arduino-project-builder/SKILL.md",
+      "computedHash": "d26cd86778221467bccd16ac7d4cca6c60c079175485cb4e8739ef7ecae632cb"
+    }
+  }
+}
