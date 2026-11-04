@@ -75,6 +75,30 @@ bool SCurveProfile::planVelocity(double velocity, double acceleration, double ta
     double limit = fabs(targetVelocity) > fabs(neutralVelocity) ? accelerationLimit : decelerationLimit;
     if (targetVelocity * neutralVelocity < 0.0) limit = fmin(accelerationLimit, decelerationLimit);
     rampTimes(fabs(change), limit, jerk, _times[1], _times[2]);
+    _times[3] = _times[1];
+    for (uint8_t i = 0; i < 7; ++i) _duration += phaseDuration(i);
+    if (!isfinite(_duration)) return false;
+    _distance = integrate(_duration).position;
+    return isfinite(_distance);
+}
+
+bool SCurveProfile::planTrackingVelocity(double velocity, double acceleration, double targetVelocity,
+                                        double limit, double jerk) {
+    if (!isfinite(velocity) || !isfinite(acceleration) || !isfinite(targetVelocity) ||
+        !positiveFinite(limit) || !positiveFinite(jerk) || fabs(acceleration) > limit * 1.000001) return false;
+    *this = SCurveProfile();
+    _velocityMode = true; _jerk = jerk;
+    _initialVelocity = velocity; _initialAcceleration = acceleration; _endVelocity = targetVelocity;
+    double change = targetVelocity - velocity;
+    double neutralChange = acceleration * fabs(acceleration) / (2.0 * jerk);
+    _direction = directionOf(change - neutralChange);
+    double signedChange = _direction * change;
+    double peak = sqrt(fmax(0.0, jerk * signedChange + 0.5 * acceleration * acceleration));
+    peak = fmin(peak, limit);
+    _times[1] = fmax(0.0, (peak - _direction * acceleration) / jerk);
+    _times[3] = peak / jerk;
+    double rampChange = (peak * peak - 0.5 * acceleration * acceleration) / jerk;
+    _times[2] = peak > 0.0 ? fmax(0.0, (signedChange - rampChange) / peak) : 0.0;
     for (uint8_t i = 0; i < 7; ++i) _duration += phaseDuration(i);
     if (!isfinite(_duration)) return false;
     _distance = integrate(_duration).position;
@@ -84,7 +108,8 @@ bool SCurveProfile::planVelocity(double velocity, double acceleration, double ta
 double SCurveProfile::phaseDuration(uint8_t phase) const {
     if (_velocityMode) {
         if (phase == 0) return _times[0];
-        if (phase == 1 || phase == 3) return _times[1];
+        if (phase == 1) return _times[1];
+        if (phase == 3) return _times[3];
         return phase == 2 ? _times[2] : 0.0;
     }
     switch (phase) {

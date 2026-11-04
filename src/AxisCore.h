@@ -5,6 +5,13 @@
 
 namespace axis {
 
+struct ExternalReference {
+    MotionState state;
+    uint32_t timestampUs = 0;
+    bool valid = true;
+    bool updateControl = true;  // Coordinators may scan inputs between common control cycles.
+};
+
 // Hardware-independent control core. Call from one task, never from an ISR.
 // nowUs and encoderCount are modulo-2^32 counters; all inputs are one snapshot.
 class Core {
@@ -13,6 +20,19 @@ class Core {
                  const Inputs& inputs = Inputs());
     static bool validConfig(const Config& config);
     bool tick(uint32_t nowUs, uint32_t encoderCount, const Inputs& inputs = Inputs());
+
+    // External trajectory: local position/speed PID and protections remain on;
+    // the per-axis motion planner is bypassed. One coordinator must own updates.
+    Result canSynchronize() const;
+    Result beginSynchronization();
+    Result validateReference(const ExternalReference& reference) const;
+    bool tickSynchronized(uint32_t nowUs, uint32_t encoderCount, const Inputs& inputs,
+                          const ExternalReference& reference);
+    Result releaseSynchronization(bool decelerate = true);
+    void finishSynchronization(Completion completion = Completion::REACHED);
+    void synchronizationFault();
+    MotionState getReferenceState() const;
+    uint32_t getSampleTimeUs() const { return _lastSampleUs; }
 
     Result moveTo(double position, double speed = 0.0, Frame frame = Frame::MACHINE);
     Result moveBy(double distance, double speed = 0.0);
@@ -123,6 +143,8 @@ class Core {
     void checkSettled(uint32_t elapsedUs, bool profileDone);
     bool checkHardLimits();
     void guardOutput();
+    template <bool External>
+    bool update(uint32_t now, uint32_t raw, const Inputs& inputs, const ExternalReference* reference);
 };
 
 }  // namespace axis

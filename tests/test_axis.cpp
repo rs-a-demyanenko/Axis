@@ -794,7 +794,10 @@ static void realGyverAdapter() {
     CHECK(three.attachEncoder(readCount, &reader) == Result::OK);
 }
 
+#include "test_sync.h"
+
 int main() {
+    synchronizationTests();
     profileInvariants(); smoothCoreAndStops(); twoDofController();
     configuration(); relativeAndProfiles(); homingAndCoordinates(); stopAndSoftLimits();
     hardLimitsAndRecovery(); faultsAndTiming(); counterWrapAndEncoder(); completionAndHolding();

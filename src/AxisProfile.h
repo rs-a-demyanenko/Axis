@@ -18,6 +18,10 @@ class SCurveProfile {
     bool planPosition(double distance, double speed, double acceleration, double deceleration, double jerk);
     bool planVelocity(double velocity, double acceleration, double targetVelocity,
                       double accelerationLimit, double decelerationLimit, double jerk);
+    // Replanning from nonzero acceleration without first neutralizing it.
+    // Used by a continuously changing, acceleration-limited external master.
+    bool planTrackingVelocity(double velocity, double acceleration, double targetVelocity,
+                              double accelerationLimit, double jerk);
     MotionState sample(double seconds) const;
     double duration() const { return _duration; }
 

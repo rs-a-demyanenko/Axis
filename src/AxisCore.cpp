@@ -275,6 +275,7 @@ Result Core::jog(double velocity) {
 Result Core::stop() {
     if (!_initialized) return Result::NOT_INITIALIZED;
     if (_fault != Fault::NONE) return Result::FAULT_ACTIVE;
+    if (_mode == Mode::SYNCHRONIZED) return Result::BUSY;  // Stop via its coordinator.
     if (_mode == Mode::STOPPING || _mode == Mode::IDLE) return Result::OK;
     if (_mode != Mode::RECOVERY) _recoveryDirection = 0;
     if (_mode == Mode::HOMING) {
@@ -744,7 +745,81 @@ void Core::checkSettled(uint32_t elapsed, bool profileDone) {
 }
 
 bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
+    return update<false>(now, raw, inputs, nullptr);
+}
+
+bool Core::tickSynchronized(uint32_t now, uint32_t raw, const Inputs& inputs, const ExternalReference& reference) {
+    return update<true>(now, raw, inputs, &reference);
+}
+
+Result Core::canSynchronize() const {
+    Result result = ready();
+    if (result != Result::OK) return result;
+    return _homed ? Result::OK : Result::NOT_HOMED;
+}
+
+Result Core::beginSynchronization() {
+    Result result = canSynchronize();
+    if (result != Result::OK) return result;
+    resetController();
+    _holding = false;
+    _referencePosition = _target = _position;
+    _referenceVelocity = 0.0;
+    _lastSampleUs = _nowUs;
+    _sampleCounts = _counts;
+    _mode = Mode::SYNCHRONIZED;
+    _completion = Completion::RUNNING;
+    return Result::OK;
+}
+
+Result Core::validateReference(const ExternalReference& reference) const {
+    if (!_initialized) return Result::NOT_INITIALIZED;
+    if (!_homed) return Result::NOT_HOMED;
+    const MotionState& s = reference.state;
+    if (!reference.valid || !finiteValue(s.position) || !finiteValue(s.velocity) ||
+        !finiteValue(s.acceleration) || !finiteValue(s.jerk)) return Result::INVALID_ARGUMENT;
+    if (_config.softLimitsEnabled && (s.position < _config.softMin - _config.positionTolerance ||
+                                      s.position > _config.softMax + _config.positionTolerance))
+        return Result::OUT_OF_RANGE;
+    double accelerationLimit = s.velocity * s.acceleration >= 0.0 ? _config.acceleration : _config.deceleration;
+    if (fabs(s.velocity) > _config.maxSpeed * 1.000001 + 1e-9 ||
+        fabs(s.acceleration) > accelerationLimit * 1.000001 + 1e-9 ||
+        (_config.maxJerk > 0.0 && fabs(s.jerk) > _config.maxJerk * 1.000001 + 1e-9))
+        return Result::OUT_OF_RANGE;
+    return Result::OK;
+}
+
+Result Core::releaseSynchronization(bool decelerate) {
+    if (_fault != Fault::NONE) return Result::FAULT_ACTIVE;
+    if (_mode != Mode::SYNCHRONIZED) return Result::BUSY;
+    if (decelerate) {
+        _mode = Mode::VELOCITY;  // Enter the normal stop branch, retaining v/a.
+        return stop();
+    }
+    disable();
+    return Result::OK;
+}
+
+void Core::finishSynchronization(Completion completion) {
+    if (_mode != Mode::SYNCHRONIZED || _fault != Fault::NONE) return;
+    _inPosition = completion == Completion::REACHED;
+    idle(completion, _config.endAction == EndAction::HOLD);
+}
+
+void Core::synchronizationFault() { if (_initialized) trip(Fault::SYNC_FAULT); }
+
+MotionState Core::getReferenceState() const {
+    MotionState state;
+    state.position = _referencePosition; state.velocity = _referenceVelocity;
+    state.acceleration = _referenceAcceleration; state.jerk = _referenceJerk;
+    return state;
+}
+
+template <bool External>
+bool Core::update(uint32_t now, uint32_t raw, const Inputs& inputs, const ExternalReference* reference) {
     if (!_initialized) return false;
+    if (External && _mode != Mode::SYNCHRONIZED) return false;
+    if (!External && _mode == Mode::SYNCHRONIZED) trip(Fault::SYNC_FAULT);
     _nowUs = now;
     _inputs = inputs;
     uint32_t deltaRaw = raw - _lastRaw;
@@ -766,7 +841,15 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
     if (inputs.emergency) trip(Fault::EMERGENCY_STOP, true);
     if (!inputs.encoderValid) trip(Fault::ENCODER_INVALID, true);
     if (_fault == Fault::NONE) checkHardLimits();
+    if (External && _fault == Fault::NONE &&
+        (validateReference(*reference) != Result::OK ||
+         static_cast<uint32_t>(now - reference->timestampUs) > _config.maxTickGapUs)) trip(Fault::SYNC_FAULT);
     const uint32_t elapsed = now - _lastSampleUs;
+    if (External && !reference->updateControl) {
+        if (elapsed > _config.maxTickGapUs) trip(Fault::CONTROL_TIMEOUT, true);
+        guardOutput();
+        return _fault != Fault::NONE;
+    }
     if (elapsed < _config.controlPeriodUs) { guardOutput(); return _fault != Fault::NONE; }
     if (elapsed > _config.maxTickGapUs && (isBusy() || _holding)) trip(Fault::CONTROL_TIMEOUT, true);
     const double dt = elapsed * 1e-6;
@@ -792,7 +875,14 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
     }
     bool profileDone = false;
     double desired = 0.0;
-    if (_mode == Mode::HOMING && _homePhase != HomePhase::PARK) homeStep(dt);
+    if (External) {
+        _target = _referencePosition = reference->state.position;
+        _referenceVelocity = reference->state.velocity;
+        _referenceAcceleration = reference->state.acceleration;
+        _referenceJerk = reference->state.jerk;
+        desired = _referenceVelocity + _config.positionKp * (_referencePosition - _position);
+    }
+    if (!External && _mode == Mode::HOMING && _homePhase != HomePhase::PARK) homeStep(dt);
     if (_fault != Fault::NONE) return true;
     if (_mode == Mode::POSITION || _mode == Mode::RECOVERY ||
         (_mode == Mode::HOMING && _homePhase == HomePhase::PARK)) {
@@ -846,7 +936,7 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
     }
     control(desired, dt);
     if (_fault != Fault::NONE) return true;
-    bool positionControl = _mode == Mode::POSITION || _mode == Mode::RECOVERY || _holding ||
+    bool positionControl = External || _mode == Mode::POSITION || _mode == Mode::RECOVERY || _holding ||
                            (_mode == Mode::HOMING && _homePhase == HomePhase::PARK);
     if (positionControl && _config.maxFollowingError > 0.0 &&
         fabs(_referencePosition - _position) > _config.maxFollowingError) {
@@ -858,7 +948,7 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
         _stallUs = accumulate(_stallUs, elapsed, _config.stallTimeUs);
         if (_stallUs >= _config.stallTimeUs) trip(Fault::STALL);
     } else _stallUs = 0;
-    if (_fault == Fault::NONE && positionControl && !_holding) checkSettled(elapsed, profileDone);
+    if (!External && _fault == Fault::NONE && positionControl && !_holding) checkSettled(elapsed, profileDone);
     // A stuck switch must not leave recovery waiting forever for a position
     // tolerance that cannot be reached while reverse output is interlocked.
     if (_fault == Fault::NONE && _mode == Mode::RECOVERY && profileDone && (minActive() || maxActive()))
@@ -911,6 +1001,7 @@ const char* toString(Fault v) {
         case Fault::HOMING_TIMEOUT: return "HOMING_TIMEOUT";
         case Fault::HOMING_TRAVEL: return "HOMING_TRAVEL";
         case Fault::NUMERIC_ERROR: return "NUMERIC_ERROR";
+        case Fault::SYNC_FAULT: return "SYNC_FAULT";
     }
     return "UNKNOWN";
 }
@@ -923,6 +1014,7 @@ const char* toString(Mode v) {
         case Mode::HOMING: return "HOMING";
         case Mode::RECOVERY: return "RECOVERY";
         case Mode::FAULT: return "FAULT";
+        case Mode::SYNCHRONIZED: return "SYNCHRONIZED";
     }
     return "UNKNOWN";
 }

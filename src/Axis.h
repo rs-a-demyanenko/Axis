@@ -6,6 +6,7 @@
 
 #include "AxisCore.h"
 #include "AxisQuadrature.h"
+#include "AxisSync.h"
 
 namespace axis {
 
@@ -196,6 +197,13 @@ class Axis : protected GyverMotor2<driver, resolution> {
     axis::Completion getCompletion() const { return _core.getCompletion(); }
     const axis::Config& getConfig() const { return _core.getConfig(); }
     axis::Snapshot snapshot() const { return _core.snapshot(); }
+    axis::AxisPort syncPort() {
+        axis::AxisPort port;
+        port.core = &_core; port.context = this;
+        port.read = readForSync; port.apply = applyForSync;
+        return port;
+    }
+    const axis::Core& controlCore() const { return _core; }
 
  private:
     axis::Core _core;
@@ -207,6 +215,15 @@ class Axis : protected GyverMotor2<driver, resolution> {
     bool _needsBegin = true, _applied = false;
     int16_t _appliedDuty = 0;
     axis::OutputAction _appliedAction = axis::OutputAction::COAST;
+
+    static bool readForSync(void* context, uint32_t& count, axis::Inputs& inputs) {
+        Axis* self = static_cast<Axis*>(context);
+        if (!self->isInitialized() || !self->_encoderReader) return false;
+        inputs = self->readInputs();
+        count = self->_encoderReader(self->_encoderContext);
+        return true;
+    }
+    static void applyForSync(void* context) { static_cast<Axis*>(context)->apply(); }
 
     static void setupPin(const axis::InputPin& input) {
         if (input.pin != 0xff) pinMode(input.pin, input.pullup ? INPUT_PULLUP : INPUT);
@@ -225,7 +242,9 @@ class Axis : protected GyverMotor2<driver, resolution> {
     }
     bool refresh() {
         if (!isInitialized()) return false;
-        tick();
+        // The coordinator owns input/control updates in this mode. Ordinary
+        // commands must return BUSY, not accidentally invoke an unowned tick.
+        if (_core.getMode() != axis::Mode::SYNCHRONIZED) tick();
         return true;
     }
     void apply() {
@@ -239,5 +258,27 @@ class Axis : protected GyverMotor2<driver, resolution> {
         _appliedDuty = duty;
         _appliedAction = output.action;
     }
+};
+
+template <uint8_t Capacity>
+class AxisGroup : public axis::Group<Capacity> {
+ public:
+    axis::Result moveBy(double distance, double speed = 0.0) {
+        return this->moveByAt(static_cast<uint32_t>(micros()), distance, speed);
+    }
+    axis::Result moveTo(double firstAxisPosition, double speed = 0.0) {
+        return this->moveToAt(static_cast<uint32_t>(micros()), firstAxisPosition, speed);
+    }
+    bool tick() { return this->tickAt(static_cast<uint32_t>(micros())); }
+    axis::Result clearFault() { return this->clearFaultAt(static_cast<uint32_t>(micros())); }
+};
+
+class AxisGear : public axis::Gear {
+ public:
+    axis::Result engage(axis::AxisPort follower, const axis::MasterSample& master, const axis::GearConfig& config) {
+        return engageAt(static_cast<uint32_t>(micros()), follower, master, config);
+    }
+    bool tick(const axis::MasterSample& master) { return tickAt(static_cast<uint32_t>(micros()), master); }
+    axis::Result clearFault() { return clearFaultAt(static_cast<uint32_t>(micros())); }
 };
 

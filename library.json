@@ -1,7 +1,7 @@
 {
   "name": "Axis",
   "version": "0.1.0",
-  "description": "Encoder feedback axis controller with 2-DOF PID, jerk-limited S-curve profiles, homing and limits",
+  "description": "Encoder feedback axes with 2-DOF PID, S-curves, coordinated groups, electronic gearing and spindle synchronization",
   "keywords": ["motor", "encoder", "pid", "axis", "esp32"],
   "frameworks": "arduino",
   "platforms": "*",

@@ -24,3 +24,11 @@ setRelativeOriginCounts	KEYWORD2
 setRelativePosition	KEYWORD2
 setMaxJerk	KEYWORD2
 SCurveProfile	KEYWORD1
+AxisGroup	KEYWORD1
+AxisGear	KEYWORD1
+AxisMaster	KEYWORD1
+EncoderMaster	KEYWORD1
+syncPort	KEYWORD2
+engage	KEYWORD2
+setRatio	KEYWORD2
+setPhaseLimit	KEYWORD2

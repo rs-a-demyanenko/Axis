@@ -77,6 +77,7 @@ def main():
                     '-isystem', str(deps), str(ROOT / 'tests' / 'test_axis.cpp'),
                     str(ROOT / 'src' / 'AxisCore.cpp'),
                     str(ROOT / 'src' / 'AxisProfile.cpp'),
+                    str(ROOT / 'src' / 'AxisSync.cpp'),
                     '-o', str(output)]
     if args.no_motor_accel:
         command += ['-DGMOTOR2_NO_ACCEL']
