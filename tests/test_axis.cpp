@@ -795,8 +795,10 @@ static void realGyverAdapter() {
 }
 
 #include "test_sync.h"
+#include "test_stepper.h"
 
 int main() {
+    stepperTests();
     synchronizationTests();
     profileInvariants(); smoothCoreAndStops(); twoDofController();
     configuration(); relativeAndProfiles(); homingAndCoordinates(); stopAndSoftLimits();

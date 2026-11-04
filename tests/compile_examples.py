@@ -35,6 +35,9 @@ def main():
               ('esp32', 'esp32:esp32:esp32', 'RotaryGear_ESP32'),
               ('esp32s3', 'esp32:esp32:esp32s3', 'ExternalFeedback'),
               ('esp32s3', 'esp32:esp32:esp32s3', 'SpindleSync_ESP32')]
+    for target, fqbn in (('avr', 'arduino:avr:uno'), ('esp32', 'esp32:esp32:esp32'),
+                         ('esp32s3', 'esp32:esp32:esp32s3')):
+        matrix.extend((target, fqbn, sketch) for sketch in ('Stepper_OpenLoop', 'Stepper_Encoder'))
     for target, fqbn, sketch in matrix:
         if args.target != 'all' and target != args.target:
             continue

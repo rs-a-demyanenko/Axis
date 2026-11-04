@@ -32,3 +32,10 @@ syncPort	KEYWORD2
 engage	KEYWORD2
 setRatio	KEYWORD2
 setPhaseLimit	KEYWORD2
+AxisStepper	KEYWORD1
+setStepsPerUnit	KEYWORD2
+getStepsPerUnit	KEYWORD2
+hasEncoder	KEYWORD2
+detachEncoder	KEYWORD2
+getStepCount	KEYWORD2
+setEnableInverted	KEYWORD2

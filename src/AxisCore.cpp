@@ -61,6 +61,7 @@ void Core::Debounce::update(bool state, uint32_t now, uint32_t wait, int64_t cou
 }
 
 bool Core::validConfig(const Config& c) {
+    if (c.control != Control::DC && c.control != Control::STEPPER) return false;
     if (c.kind != Kind::LINEAR && c.kind != Kind::ROTARY) return false;
     if (c.encoder.kind != EncoderKind::LINEAR && c.encoder.kind != EncoderKind::ROTARY) return false;
     if (c.continuous && c.kind != Kind::ROTARY) return false;
@@ -70,7 +71,8 @@ bool Core::validConfig(const Config& c) {
         !nonnegative(c.velocityDerivativeWeight) || c.velocityDerivativeWeight > 1.0) return false;
     if (!positive(c.positionKp) || !nonnegative(c.velocityKp) || !nonnegative(c.velocityKi) ||
         !nonnegative(c.velocityKd) || !nonnegative(c.velocityFeedforward)) return false;
-    if (c.velocityKp == 0.0 && c.velocityKi == 0.0 && c.velocityFeedforward == 0.0) return false;
+    if (c.control == Control::DC && c.velocityKp == 0.0 && c.velocityKi == 0.0 &&
+        c.velocityFeedforward == 0.0) return false;
     if (!nonnegative(c.velocityFilterTime) || !nonnegative(c.derivativeFilterTime)) return false;
     if (!positive(c.maxOutput) || c.maxOutput > 1.0) return false;
     if (!positive(c.positionTolerance) || c.positionTolerance * c.encoder.countsPerUnit < 1.0 ||
@@ -352,6 +354,7 @@ void Core::trip(Fault fault, bool loseReference) {
     _referenceVelocity = 0.0;
     _completion = Completion::FAULTED;
     _output.duty = 0.0;
+    _output.velocity = 0.0;
     _output.action = _config.faultAction == FaultAction::BRAKE ? OutputAction::BRAKE : OutputAction::COAST;
 }
 
@@ -367,6 +370,7 @@ Result Core::clearFault() {
     resetController();
     _referencePosition = _target = _position;
     _output.duty = 0.0;
+    _output.velocity = 0.0;
     _output.action = OutputAction::COAST;
     return Result::OK;
 }
@@ -386,10 +390,12 @@ void Core::idle(Completion completion, bool hold) {
     _rampActive = _jogStopping = false;
     _referencePosition = _target;
     _settleUs = _followingUs = _stallUs = 0;
+    if (_config.control == Control::STEPPER) _output.velocity = 0.0;
     if (!hold) {
         resetController();
         _inPosition = completion == Completion::REACHED;
         _output.duty = 0.0;
+        _output.velocity = 0.0;
         _output.action = OutputAction::COAST;
     }
 }
@@ -402,6 +408,7 @@ void Core::disable() {
         idle(Completion::CANCELLED, false);
     }
     _output.duty = 0.0;
+    _output.velocity = 0.0;
     _output.action = OutputAction::COAST;
 }
 
@@ -681,21 +688,30 @@ void Core::guardOutput() {
     if (_fault != Fault::NONE || _output.action != OutputAction::DRIVE) return;
     bool allowTowardHome = _mode == Mode::HOMING &&
         (_homePhase == HomePhase::SEARCH || _homePhase == HomePhase::LATCH) && !_homeInput.stable;
-    if (minActive() && _output.duty < 0.0 &&
-        !(allowTowardHome && _config.home.source == HomeSource::MIN_LIMIT)) _output.duty = 0.0;
-    if (maxActive() && _output.duty > 0.0 &&
-        !(allowTowardHome && _config.home.source == HomeSource::MAX_LIMIT)) _output.duty = 0.0;
+    double& command = _config.control == Control::STEPPER ? _output.velocity : _output.duty;
+    if (minActive() && command < 0.0 &&
+        !(allowTowardHome && _config.home.source == HomeSource::MIN_LIMIT)) command = 0.0;
+    if (maxActive() && command > 0.0 &&
+        !(allowTowardHome && _config.home.source == HomeSource::MAX_LIMIT)) command = 0.0;
     // Once the switch has released, reverse torque is needed to brake and
     // correct a small overshoot. An asserted limit still blocks it above.
     if (softActive()) {
-        if ((_position <= _config.softMin && _output.duty < 0.0) ||
-            (_position >= _config.softMax && _output.duty > 0.0)) _output.duty = 0.0;
+        if ((_position <= _config.softMin && command < 0.0) ||
+            (_position >= _config.softMax && command > 0.0)) command = 0.0;
     }
 }
 
 void Core::control(double desired, double dt) {
     if (!finiteValue(desired) || !positive(dt)) { trip(Fault::NUMERIC_ERROR, true); return; }
     _velocityCommand = safeVelocity(clampValue(desired, -_config.maxSpeed, _config.maxSpeed));
+    if (_config.control == Control::STEPPER) {
+        _output.duty = 0.0;
+        _output.velocity = _velocityCommand;
+        _output.action = OutputAction::DRIVE;
+        _saturated = false;
+        guardOutput();
+        return;
+    }
     const double error = _velocityCommand - _velocity;
     const double rawDerivative = (_config.velocityDerivativeWeight *
                                   (_velocityCommand - _previousVelocityCommand) -
@@ -925,6 +941,8 @@ bool Core::update(uint32_t now, uint32_t raw, const Inputs& inputs, const Extern
             return true;
         }
         desired = _config.positionKp * (_target - _position);
+        if (_config.control == Control::STEPPER &&
+            fabs(_target - _position) <= _config.positionTolerance) desired = 0.0;
         if (fabs(_target - _position) > _config.positionTolerance + _config.positionHysteresis ||
             fabs(_velocity) > _config.velocityTolerance) {
             _inPosition = false;

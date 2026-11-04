@@ -17,6 +17,7 @@ enum class HomeSource : uint8_t { SEPARATE, MIN_LIMIT, MAX_LIMIT };
 enum class EndAction : uint8_t { HOLD, COAST };
 enum class FaultAction : uint8_t { COAST, BRAKE };
 enum class OutputAction : uint8_t { COAST, DRIVE, BRAKE };
+enum class Control : uint8_t { DC, STEPPER };
 enum class Result : uint8_t {
     OK, NOT_INITIALIZED, INVALID_ARGUMENT, BUSY, NOT_HOMED,
     OUT_OF_RANGE, LIMIT_ACTIVE, FAULT_ACTIVE, UNSUPPORTED
@@ -64,6 +65,7 @@ struct HomeConfig {
 };
 
 struct Config {
+    Control control = Control::DC;     // Selected by the hardware adapter.
     Kind kind = Kind::LINEAR;
     bool continuous = false;           // Only valid for a rotary axis.
     double rotaryPeriod = 360.0;
@@ -120,6 +122,7 @@ struct Inputs {
 struct Output {
     double duty = 0.0;
     OutputAction action = OutputAction::COAST;
+    double velocity = 0.0;             // STEPPER: signed physical units/s.
 };
 
 struct Snapshot {

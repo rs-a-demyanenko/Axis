@@ -1,6 +1,6 @@
 <h1 align="center">Axis</h1>
 
-<p align="center">Управление осью станка с обратной связью по энкодеру</p>
+<p align="center">Управление осью станка: коллекторные и шаговые двигатели</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Версия 0.1.0">
@@ -17,12 +17,13 @@
   <a href="tests/VALIDATION.md">Проверки</a>
 </p>
 
-**Axis** — библиотека Arduino для линейных и вращательных осей с коллекторным двигателем. Задайте точку и скорость — библиотека построит профиль движения, замкнёт контуры позиции и скорости и проверит ограничения. Управление драйвером основано на [GyverMotor2](https://github.com/GyverLibs/GyverMotor2).
+**Axis** — библиотека Arduino для линейных и вращательных осей с коллекторным или шаговым двигателем. Задайте точку и скорость — библиотека построит профиль движения и проверит ограничения. Коллекторные двигатели управляются через [GyverMotor2](https://github.com/GyverLibs/GyverMotor2) с энкодером; шаговые — через [StepperCore из GyverStepper](https://github.com/GyverLibs/GyverStepper/blob/main/src/StepperCore.h), с энкодером или подсчётом выданных шагов.
 
 ## Возможности
 
 - **S-профиль движения** — абсолютные и относительные команды с ограничением скорости, ускорения и рывка.
 - **Обратная связь** — линейный или вращательный энкодер, декодирование A/B ×4 либо внешний счётчик.
+- **Шаговые двигатели** — STEP/DIR, четыре фазы, полушаг и виртуальный драйвер. Масштабы шагов и энкодера задаются отдельно.
 - **Регулирование** — каскад позиции и скорости, 2-DOF PID с весами задания и удержание точки.
 - **Привязка Home** — поиск датчика, медленный повторный подход и парковка.
 - **Ограничения** — MIN/MAX, программные границы и контролируемый отход от концевика.
@@ -31,7 +32,7 @@
 
 ## Установка
 
-**Arduino IDE:** установите **GyverMotor2** через менеджер библиотек, затем добавьте Axis через ZIP или поместите каталог в `Documents/Arduino/libraries/Axis`.
+**Arduino IDE:** установите **GyverMotor2** и **GyverStepper** через менеджер библиотек, затем добавьте Axis через ZIP или поместите каталог в `Documents/Arduino/libraries/Axis`.
 
 <details>
 <summary><b>PlatformIO</b></summary>
@@ -75,6 +76,19 @@ config.velocityDerivativeWeight = 0;  // D-составляющая по изм�
 
 S-образный разгон создаёт профиль с ограничением рывка. Для просмотра кривых без двигателя откройте [SCurvePlotter](examples/SCurvePlotter/SCurvePlotter.ino) и Serial Plotter на 115200 бод. [Подробнее о профиле и регуляторе](docs/GUIDE.md#s-профиль-и-ограничение-рывка).
 
+## Шаговые двигатели
+
+```cpp
+#include <AxisStepper.h>
+AxisStepper<STEPPER2WIRE> x(5, 6, 7);  // STEP, DIR, EN
+
+// В setup(), до begin():
+// x.setStepsPerUnit(640);            // 200 шагов * 16 микрошагов / 5 мм
+// x.attachEncoder(readEncoder);     // Необязательно; без него считаются шаги
+```
+
+Команды `moveTo()`, `moveBy()`, `home()`, `stop()` и `syncPort()` общие с DC-осями. Без энкодера координата рассчитывается только по реально выданным импульсам; физические пропуски шагов не обнаруживаются. Частота вызовов `tick()` должна существенно превышать `maxSpeed * stepsPerUnit`. Откройте [пример без энкодера](examples/Stepper_OpenLoop/Stepper_OpenLoop.ino), [пример с энкодером](examples/Stepper_Encoder/Stepper_Encoder.ino) и [руководство по шаговым двигателям](docs/STEPPERS.md).
+
 ## Положение оси
 
 | Координата | В мм (для вращательной оси — в градусах) | В отсчётах энкодера |
@@ -89,6 +103,8 @@ S-образный разгон создаёт профиль с огранич�
 | Пример | Что показывает |
 |---|---|
 | [Linear_AVR](examples/Linear_AVR/Linear_AVR.ino) | Линейная ось, Uno/Nano, рабочий ноль и управление через Serial |
+| [Stepper_OpenLoop](examples/Stepper_OpenLoop/Stepper_OpenLoop.ino) | Шаговый двигатель, положение по выданным импульсам |
+| [Stepper_Encoder](examples/Stepper_Encoder/Stepper_Encoder.ino) | Шаговый двигатель с обратной связью по энкодеру |
 | [Linear_ESP32](examples/Linear_ESP32/Linear_ESP32.ino) | Линейная ось и атомарное чтение энкодера на ESP32 |
 | [Rotary_ESP32](examples/Rotary_ESP32/Rotary_ESP32.ino) | Углы, выбор направления и многооборотное движение |
 | [ExternalFeedback](examples/ExternalFeedback/ExternalFeedback.ino) | Адаптер внешнего счётчика и диагностики |

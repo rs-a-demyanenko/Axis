@@ -1,12 +1,12 @@
 {
   "name": "Axis",
   "version": "0.1.0",
-  "description": "Encoder feedback axes with 2-DOF PID, S-curves, coordinated groups, electronic gearing and spindle synchronization",
-  "keywords": ["motor", "encoder", "pid", "axis", "esp32"],
+  "description": "DC and stepper axes with optional encoder feedback, S-curves, coordinated groups and electronic gearing",
+  "keywords": ["motor", "stepper", "encoder", "pid", "axis", "esp32"],
   "frameworks": "arduino",
   "platforms": "*",
   "repository": {"type": "git", "url": "https://github.com/rs-a-demyanenko/Axis.git"},
-  "dependencies": {"gyverlibs/GyverMotor2": "*"},
+  "dependencies": {"gyverlibs/GyverMotor2": "*", "gyverlibs/GyverStepper": "^2.7.2"},
   "build": {"includeDir": "src", "srcDir": "src"}
 }
 

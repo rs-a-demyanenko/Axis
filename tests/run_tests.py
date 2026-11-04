@@ -1,4 +1,4 @@
-"""Run native C++ tests against the real, pinned GyverMotor2 header.
+"""Run native C++ tests against real, pinned GyverMotor2 and GyverStepper headers.
 
 Python 3 standard library only. Optional portable Zig stays inside .tools/.
 """
@@ -16,6 +16,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / '.build'
 GYVER_COMMIT = '29972794183db1d92df00ef0e71a38dcac48545d'
+STEPPER_COMMIT = 'e9d0a68833605e87a082a9367877434d6bb8f271'
 
 
 def dependency():
@@ -25,6 +26,12 @@ def dependency():
     if not target.exists():
         print('Downloading GyverMotor2 at', GYVER_COMMIT, flush=True)
         target.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+    for name in ('StepperCore.h', 'GStypes.h'):
+        header = target.parent / name
+        if not header.exists():
+            print('Downloading', name, 'at', STEPPER_COMMIT, flush=True)
+            url = f'https://raw.githubusercontent.com/GyverLibs/GyverStepper/{STEPPER_COMMIT}/src/{name}'
+            header.write_bytes(urllib.request.urlopen(url, timeout=60).read())
     return target.parent
 
 
