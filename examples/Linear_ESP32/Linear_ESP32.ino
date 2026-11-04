@@ -67,6 +67,9 @@ void setup() {
     config.encoder = axis::EncoderScale::rotary(2000, 5);
     config.maxSpeed = 10;
     config.acceleration = config.deceleration = 30;
+    config.maxJerk = 300;
+    config.velocitySetpointWeight = 0.8;
+    config.velocityDerivativeWeight = 0;
     config.home.switchPosition = -1;
     config.home.parkPosition = 0;
     config.home.maxTravel = 120;

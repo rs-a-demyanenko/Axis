@@ -22,16 +22,20 @@ def main():
     if args.log:
         Path(args.log).write_text('', encoding='utf-8')
     matrix = [('avr', 'arduino:avr:uno', 'Linear_AVR'),
+              ('avr', 'arduino:avr:nano', 'Linear_AVR'),
               ('avr', 'arduino:avr:uno', 'ExternalFeedback'),
+              ('avr', 'arduino:avr:uno', 'SCurvePlotter'),
               ('esp32', 'esp32:esp32:esp32', 'Linear_ESP32'),
               ('esp32', 'esp32:esp32:esp32', 'Rotary_ESP32'),
               ('esp32', 'esp32:esp32:esp32', 'ExternalFeedback'),
+              ('esp32', 'esp32:esp32:esp32', 'SCurvePlotter'),
               ('esp32s3', 'esp32:esp32:esp32s3', 'ExternalFeedback')]
     for target, fqbn, sketch in matrix:
         if args.target != 'all' and target != args.target:
             continue
+        boardSuffix = '-nano' if fqbn == 'arduino:avr:nano' else ''
         command = [args.cli, 'compile', '--fqbn', fqbn, '--library', str(ROOT),
-                   '--library', str(deps), '--build-path', str(BUILD / (target + '-' + sketch)),
+                   '--library', str(deps), '--build-path', str(BUILD / (target + '-' + sketch + boardSuffix)),
                    '--warnings', 'all']
         if args.config:
             command += ['--config-file', args.config]

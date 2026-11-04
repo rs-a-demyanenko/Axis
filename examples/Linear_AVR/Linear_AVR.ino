@@ -1,9 +1,9 @@
 // Arduino Uno/Nano ATmega328P. A/B encoder on both external interrupts.
 // Serial 115200: h home; a absolute 20 mm; r/l relative +/-5 mm;
-// j jog +2 mm/s; s stop; d disable; b brake; c clear fault;
+// s stop; d disable; c clear fault; e emergency stop;
 // z zero relative position; o/O relative origin at +/-20 mm; p read positions;
-// w move to work +5 mm;
-// + recover from MIN; - recover from MAX; e emergency stop.
+// Compact command panel fits Nano's 30720-byte limit. Jog and limit-recovery
+// commands are demonstrated in Linear_ESP32; all methods also exist on AVR.
 #include <Axis.h>
 #include <util/atomic.h>
 
@@ -37,7 +37,8 @@ void printCount(int64_t value) {
 void reportPositions() {
     if (machineAxis.isBusy()) { report(axis::Result::BUSY); return; }
     if (Serial.availableForWrite() < 60) return;
-    Serial.print("H:"); Serial.println(machineAxis.isHomed());
+    Serial.print("H:"); Serial.print(machineAxis.isHomed());
+    Serial.print(" F:"); Serial.println(static_cast<int>(machineAxis.getFault()));
     Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 3);
     Serial.print(" mm "); printCount(machineAxis.getAbsolutePositionCounts()); Serial.println(" cnt");
     Serial.print("R:"); Serial.print(machineAxis.getRelativePosition(), 3);
@@ -66,6 +67,9 @@ void setup() {
     config.maxSpeed = 10;
     config.acceleration = 30;
     config.deceleration = 30;
+    config.maxJerk = 300;  // mm/s^3: acceleration rises/falls smoothly.
+    config.velocitySetpointWeight = 0.8;  // 2-DOF PID, beta.
+    config.velocityDerivativeWeight = 0;  // No derivative kick from setpoint.
     config.softMin = 0;
     config.softMax = 100;
     config.home.switchPosition = -1;
@@ -88,29 +92,15 @@ void loop() {
             case 'a': report(machineAxis.moveTo(20, 5)); break;
             case 'r': report(machineAxis.moveBy(5, 2)); break;
             case 'l': report(machineAxis.moveBy(-5, 2)); break;
-            case 'j': report(machineAxis.jog(2)); break;
             case 's': report(machineAxis.stop()); break;
             case 'd': machineAxis.disable(); break;
-            case 'b': machineAxis.brake(); break;
             case 'c': report(machineAxis.clearFault()); break;
             case 'z': report(machineAxis.setRelativePosition()); break;
             case 'o': report(machineAxis.setRelativeOrigin(20)); break;
             case 'O': report(machineAxis.setRelativeOrigin(-20)); break;
             case 'p': reportPositions(); break;
-            case 'w': report(machineAxis.moveTo(5, 2, axis::Frame::WORK)); break;
-            case '+': report(machineAxis.recoverFromLimit(1, 2)); break;
-            case '-': report(machineAxis.recoverFromLimit(-1, 2)); break;
             case 'e': machineAxis.emergencyStop(); break;
         }
-    }
-    static uint32_t lastReport = 0;
-    if (millis() - lastReport >= 200 && Serial.availableForWrite() >= 60) {
-        lastReport = millis();
-        Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 2);
-        Serial.print(" R:"); Serial.print(machineAxis.getRelativePosition(), 2);
-        Serial.print(" V:"); Serial.print(machineAxis.getVelocity(), 2);
-        Serial.print(" M:"); Serial.print(static_cast<int>(machineAxis.getMode()));
-        Serial.print(" F:"); Serial.println(static_cast<int>(machineAxis.getFault()));
     }
 }
 

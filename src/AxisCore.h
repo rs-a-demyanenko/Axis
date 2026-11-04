@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AxisTypes.h"
+#include "AxisProfile.h"
 
 namespace axis {
 
@@ -34,6 +35,7 @@ class Core {
     Result setMaxSpeed(double speed);
     Result setAcceleration(double acceleration);
     Result setDeceleration(double deceleration);
+    Result setMaxJerk(double jerk);
 
     bool isInitialized() const { return _initialized; }
     bool isHomed() const { return _homed; }
@@ -87,7 +89,12 @@ class Core {
     double _originPosition = 0.0, _position = 0.0, _samplePosition = 0.0;
     double _workOffset = 0.0, _velocity = 0.0, _previousVelocity = 0.0;
     double _derivative = 0.0, _integral = 0.0, _velocityCommand = 0.0;
+    double _previousVelocityCommand = 0.0;
     double _target = 0.0, _referencePosition = 0.0, _referenceVelocity = 0.0;
+    double _referenceAcceleration = 0.0, _referenceJerk = 0.0;
+    SCurveProfile _smoothProfile;
+    bool _rampActive = false, _jogStopping = false;
+    double _rampTarget = 0.0, _rampLastPosition = 0.0;
     double _jogVelocity = 0.0, _moveSpeed = 0.0;
     double _profileStart = 0.0, _profileDistance = 0.0, _profileSign = 1.0;
     double _profilePeak = 0.0, _accelTime = 0.0, _cruiseTime = 0.0;
@@ -107,7 +114,7 @@ class Core {
     void resetController();
     void trip(Fault fault, bool loseReference = false);
     void idle(Completion completion, bool hold);
-    void startProfile(double position, double speed);
+    bool startProfile(double position, double speed);
     bool advanceProfile(double dt);
     double approachVelocity(double desired, double dt);
     double safeVelocity(double velocity) const;

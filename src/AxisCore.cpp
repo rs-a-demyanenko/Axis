@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <new>
 
 namespace axis {
 namespace {
@@ -65,6 +66,8 @@ bool Core::validConfig(const Config& c) {
     if (c.continuous && c.kind != Kind::ROTARY) return false;
     if (!positive(c.rotaryPeriod) || !positive(c.encoder.countsPerUnit)) return false;
     if (!positive(c.maxSpeed) || !positive(c.acceleration) || !positive(c.deceleration)) return false;
+    if (!nonnegative(c.maxJerk) || !nonnegative(c.velocitySetpointWeight) || c.velocitySetpointWeight > 1.0 ||
+        !nonnegative(c.velocityDerivativeWeight) || c.velocityDerivativeWeight > 1.0) return false;
     if (!positive(c.positionKp) || !nonnegative(c.velocityKp) || !nonnegative(c.velocityKi) ||
         !nonnegative(c.velocityKd) || !nonnegative(c.velocityFeedforward)) return false;
     if (c.velocityKp == 0.0 && c.velocityKi == 0.0 && c.velocityFeedforward == 0.0) return false;
@@ -101,7 +104,10 @@ bool Core::validConfig(const Config& c) {
 Result Core::begin(Config config, uint32_t now, uint32_t raw, const Inputs& inputs) {
     if (isBusy()) return Result::BUSY;
     if (!validConfig(config)) return Result::INVALID_ARGUMENT;
-    *this = Core();
+    // Reconstruct in the existing storage: unlike assignment from Core(), this
+    // does not require a second, full-size controller on the small AVR stack.
+    // Placement construction allocates no memory. Config is already a value copy.
+    ::new (static_cast<void*>(this)) Core();
     _config = config;
     _inputs = inputs;
     _lastRaw = raw;
@@ -171,26 +177,38 @@ Result Core::checkMove(double position, double speed) const {
 void Core::resetController() {
     _integral = _derivative = _velocityCommand = 0.0;
     _previousVelocity = _velocity;
+    _previousVelocityCommand = 0.0;
+    _referenceAcceleration = _referenceJerk = 0.0;
+    _rampActive = _jogStopping = false;
     _followingUs = _stallUs = _settleUs = 0;
     _saturated = _inPosition = false;
 }
 
-void Core::startProfile(double position, double speed) {
+bool Core::startProfile(double position, double speed) {
     _target = position;
     _profileStart = _referencePosition = _position;
     _profileDistance = fabs(position - _position);
     _profileSign = signOf(position - _position);
     _moveSpeed = speed;
-    const double a = _config.acceleration, d = _config.deceleration;
-    _profilePeak = fmin(speed, sqrt(2.0 * _profileDistance / (1.0 / a + 1.0 / d)));
-    _accelTime = _profilePeak / a;
-    _decelTime = _profilePeak / d;
-    double rampDistance = 0.5 * _profilePeak * (_accelTime + _decelTime);
-    _cruiseTime = _profilePeak > 0.0 ? fmax(0.0, (_profileDistance - rampDistance) / _profilePeak) : 0.0;
     _profileTime = _referenceVelocity = 0.0;
     _holding = false;
     _completion = Completion::RUNNING;
     resetController();
+    if (_config.maxJerk > 0.0) {
+        if (!_smoothProfile.planPosition(position - _position, speed, _config.acceleration,
+                                         _config.deceleration, _config.maxJerk)) {
+            trip(Fault::NUMERIC_ERROR, true);
+            return false;
+        }
+    } else {
+        const double a = _config.acceleration, d = _config.deceleration;
+        _profilePeak = fmin(speed, sqrt(2.0 * _profileDistance / (1.0 / a + 1.0 / d)));
+        _accelTime = _profilePeak / a;
+        _decelTime = _profilePeak / d;
+        double rampDistance = 0.5 * _profilePeak * (_accelTime + _decelTime);
+        _cruiseTime = _profilePeak > 0.0 ? fmax(0.0, (_profileDistance - rampDistance) / _profilePeak) : 0.0;
+    }
+    return true;
 }
 
 Result Core::moveTo(double position, double speed, Frame frame) {
@@ -201,7 +219,7 @@ Result Core::moveTo(double position, double speed, Frame frame) {
     if (frame == Frame::WORK) position += _workOffset;
     result = checkMove(position, speed);
     if (result != Result::OK) return result;
-    startProfile(position, speed == 0.0 ? _config.maxSpeed : speed);
+    if (!startProfile(position, speed == 0.0 ? _config.maxSpeed : speed)) return Result::FAULT_ACTIVE;
     _mode = Mode::POSITION;
     return Result::OK;
 }
@@ -216,7 +234,7 @@ Result Core::moveBy(double distance, double speed) {
     if (result != Result::OK) return result;
     speed = speed == 0.0 ? _config.maxSpeed : speed;
     if (!_homed) speed = fmin(speed, _config.unhomedMaxSpeed);
-    startProfile(_position + distance, speed);
+    if (!startProfile(_position + distance, speed)) return Result::FAULT_ACTIVE;
     _mode = Mode::POSITION;
     return Result::OK;
 }
@@ -266,8 +284,11 @@ Result Core::stop() {
         _homePhase = HomePhase::NONE;
     }
     _mode = Mode::STOPPING;
-    _referencePosition = _position;
-    _referenceVelocity = _velocity;
+    if (_config.maxJerk == 0.0) {
+        _referencePosition = _position;
+        _referenceVelocity = _velocity;
+    }
+    _rampActive = false;
     _target = _position;
     _settleUs = 0;
     _followingUs = 0;
@@ -315,7 +336,7 @@ Result Core::recoverFromLimit(int8_t direction, double distance, double speed) {
     _fault = Fault::NONE;
     _recoveryDirection = direction;
     speed = speed == 0.0 ? _config.recoveryMaxSpeed : speed;
-    startProfile(target, fmin(speed, _config.maxSpeed));
+    if (!startProfile(target, fmin(speed, _config.maxSpeed))) return Result::FAULT_ACTIVE;
     _mode = Mode::RECOVERY;
     return Result::OK;
 }
@@ -360,6 +381,8 @@ void Core::idle(Completion completion, bool hold) {
     _holding = hold;
     _recoveryDirection = 0;
     _referenceVelocity = 0.0;
+    _referenceAcceleration = _referenceJerk = 0.0;
+    _rampActive = _jogStopping = false;
     _referencePosition = _target;
     _settleUs = _followingUs = _stallUs = 0;
     if (!hold) {
@@ -462,21 +485,41 @@ Result Core::setDeceleration(double value) {
     return Result::OK;
 }
 
+Result Core::setMaxJerk(double value) {
+    if (!_initialized) return Result::NOT_INITIALIZED;
+    if (isBusy() || _holding) return Result::BUSY;
+    if (!nonnegative(value)) return Result::INVALID_ARGUMENT;
+    _config.maxJerk = value;
+    return Result::OK;
+}
+
 bool Core::advanceProfile(double dt) {
     _profileTime += dt;
+    if (_config.maxJerk > 0.0) {
+        MotionState state = _smoothProfile.sample(_profileTime);
+        _referencePosition = _profileStart + state.position;
+        _referenceVelocity = state.velocity;
+        _referenceAcceleration = state.acceleration;
+        _referenceJerk = state.jerk;
+        return _profileTime >= _smoothProfile.duration();
+    }
     double t = _profileTime, distance, velocity;
     if (t < _accelTime) {
+        _referenceAcceleration = _profileSign * _config.acceleration;
         velocity = _config.acceleration * t;
         distance = 0.5 * _config.acceleration * t * t;
     } else if (t < _accelTime + _cruiseTime) {
+        _referenceAcceleration = 0.0;
         velocity = _profilePeak;
         distance = 0.5 * _profilePeak * _accelTime + _profilePeak * (t - _accelTime);
     } else if (t < _accelTime + _cruiseTime + _decelTime) {
+        _referenceAcceleration = -_profileSign * _config.deceleration;
         t -= _accelTime + _cruiseTime;
         velocity = _profilePeak - _config.deceleration * t;
         distance = 0.5 * _profilePeak * _accelTime + _profilePeak * _cruiseTime +
                    _profilePeak * t - 0.5 * _config.deceleration * t * t;
     } else {
+        _referenceAcceleration = 0.0;
         _referencePosition = _target;
         _referenceVelocity = 0.0;
         return true;
@@ -487,12 +530,39 @@ bool Core::advanceProfile(double dt) {
 }
 
 double Core::approachVelocity(double desired, double dt) {
+    if (_config.maxJerk > 0.0) {
+        if (!_rampActive || desired != _rampTarget) {
+            if (!_smoothProfile.planVelocity(_referenceVelocity, _referenceAcceleration, desired,
+                                              _config.acceleration, _config.deceleration, _config.maxJerk)) {
+                trip(Fault::NUMERIC_ERROR, true);
+                return 0.0;
+            }
+            _profileTime = _rampLastPosition = 0.0;
+            _rampTarget = desired;
+            _rampActive = true;
+        }
+        if (_profileTime >= _smoothProfile.duration()) {
+            _referencePosition += desired * dt;
+            _referenceVelocity = desired;
+            _referenceAcceleration = _referenceJerk = 0.0;
+        } else {
+            _profileTime += dt;
+            MotionState state = _smoothProfile.sample(_profileTime);
+            _referencePosition += state.position - _rampLastPosition;
+            _rampLastPosition = state.position;
+            _referenceVelocity = state.velocity;
+            _referenceAcceleration = state.acceleration;
+            _referenceJerk = state.jerk;
+        }
+        return _referenceVelocity;
+    }
     const double previous = _referenceVelocity;
     // Brake to zero first on reversal; this avoids crossing zero at an acceleration
     // that exceeds the configured deceleration.
     if (previous * desired < 0.0) desired = 0.0;
     const double rate = fabs(desired) > fabs(previous) ? _config.acceleration : _config.deceleration;
     _referenceVelocity += clampValue(desired - previous, -rate * dt, rate * dt);
+    _referenceAcceleration = (_referenceVelocity - previous) / dt;
     _referencePosition += 0.5 * (previous + _referenceVelocity) * dt;
     return _referenceVelocity;
 }
@@ -502,15 +572,37 @@ double Core::safeVelocity(double velocity) const {
     const double remaining = velocity > 0.0 ? _config.softMax - _position : _position - _config.softMin;
     // Include the maximum allowed update gap in the stopping-distance allowance.
     const double latency = _config.maxTickGapUs * 1e-6;
-    const double dv = _config.deceleration * latency;
-    const double allowed = sqrt(dv * dv + 2.0 * _config.deceleration * fmax(0.0, remaining)) - dv;
+    double linear = latency, constant = 0.0;
+    double brakingDeceleration = _config.deceleration;
+    if (_config.maxJerk > 0.0) {
+        const double a = fmax(0.0, _referenceAcceleration * signOf(velocity));
+        const double neutralTime = a / _config.maxJerk;
+        const double extraVelocity = a * latency + 0.5 * a * neutralTime;
+        // Choose the triangular ramp's peak acceleration when it is lower
+        // than the configured limit. This keeps the bound useful at low jerk.
+        brakingDeceleration = fmin(brakingDeceleration,
+                                    sqrt((fabs(velocity) + extraVelocity) * _config.maxJerk));
+        // Conservative S-stop distance. For triangular acceleration ramps,
+        // v^2/(2*d) + v*d/(2*j) is an upper bound, not an underestimate.
+        linear += neutralTime + extraVelocity / brakingDeceleration +
+                  0.5 * brakingDeceleration / _config.maxJerk;
+        constant = 0.5 * a * latency * latency + a * latency * neutralTime +
+                   a * neutralTime * neutralTime / 3.0 +
+                   0.5 * extraVelocity * extraVelocity / brakingDeceleration +
+                   0.5 * extraVelocity * brakingDeceleration / _config.maxJerk;
+    }
+    const double dv = brakingDeceleration * linear;
+    const double distance = fmax(0.0, remaining - constant);
+    const double allowed = 2.0 * brakingDeceleration * distance /
+                           (sqrt(dv * dv + 2.0 * brakingDeceleration * distance) + dv);
     return signOf(velocity) * fmin(fabs(velocity), allowed);
 }
 
 void Core::homeStep(double dt) {
     const double direction = _config.home.direction;
     double desired = 0.0;
-    const bool stopped = fabs(_referenceVelocity) < 1e-9 && fabs(_velocity) <= _config.velocityTolerance;
+    const bool stopped = fabs(_referenceVelocity) < 1e-9 && fabs(_referenceAcceleration) < 1e-9 &&
+                         fabs(_velocity) <= _config.velocityTolerance;
     switch (_homePhase) {
         case HomePhase::RELEASE:
             desired = -direction * _config.home.latchSpeed;
@@ -563,7 +655,7 @@ void Core::homeStep(double dt) {
             break;
         case HomePhase::LATCH_STOP:
             if (stopped) {
-                startProfile(_config.home.parkPosition, _config.home.latchSpeed);
+                if (!startProfile(_config.home.parkPosition, _config.home.latchSpeed)) return;
                 _homePhase = HomePhase::PARK;
             }
             break;
@@ -604,11 +696,15 @@ void Core::control(double desired, double dt) {
     if (!finiteValue(desired) || !positive(dt)) { trip(Fault::NUMERIC_ERROR, true); return; }
     _velocityCommand = safeVelocity(clampValue(desired, -_config.maxSpeed, _config.maxSpeed));
     const double error = _velocityCommand - _velocity;
-    const double rawDerivative = (_velocity - _previousVelocity) / dt;
+    const double rawDerivative = (_config.velocityDerivativeWeight *
+                                  (_velocityCommand - _previousVelocityCommand) -
+                                  (_velocity - _previousVelocity)) / dt;
     _previousVelocity = _velocity;
+    _previousVelocityCommand = _velocityCommand;
     double alpha = _config.derivativeFilterTime == 0.0 ? 1.0 : dt / (_config.derivativeFilterTime + dt);
     _derivative += alpha * (rawDerivative - _derivative);
-    const double base = _config.velocityKp * error - _config.velocityKd * _derivative +
+    const double proportionalError = _config.velocitySetpointWeight * _velocityCommand - _velocity;
+    const double base = _config.velocityKp * proportionalError + _config.velocityKd * _derivative +
                         _config.velocityFeedforward * _velocityCommand;
     const double limit = _config.maxOutput;
     const double candidate = clampValue(_integral + _config.velocityKi * error * dt, -limit, limit);
@@ -697,22 +793,33 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
     bool profileDone = false;
     double desired = 0.0;
     if (_mode == Mode::HOMING && _homePhase != HomePhase::PARK) homeStep(dt);
+    if (_fault != Fault::NONE) return true;
     if (_mode == Mode::POSITION || _mode == Mode::RECOVERY ||
         (_mode == Mode::HOMING && _homePhase == HomePhase::PARK)) {
         profileDone = advanceProfile(dt);
         desired = _referenceVelocity + _config.positionKp * (_referencePosition - _position);
         desired = clampValue(desired, -_moveSpeed, _moveSpeed);
     } else if (_mode == Mode::VELOCITY) {
-        desired = approachVelocity(safeVelocity(_jogVelocity), dt);
+        if (_config.maxJerk > 0.0) {
+            double cap = fabs(safeVelocity(_jogVelocity));
+            double speedNow = fmax(fabs(_referenceVelocity), fabs(_velocity));
+            if (softActive() && cap < fabs(_jogVelocity) &&
+                cap <= speedNow + _config.acceleration * dt) _jogStopping = true;
+            desired = approachVelocity(_jogStopping ? 0.0 : _jogVelocity, dt);
+        } else desired = approachVelocity(safeVelocity(_jogVelocity), dt);
         // Automatically finish a jog as a controlled stop at a software boundary.
-        if (softActive() && fabs(safeVelocity(_jogVelocity)) <= _config.velocityTolerance &&
+        const bool finishedJog = _config.maxJerk > 0.0 ?
+            (_jogStopping && _referenceVelocity == 0.0 && _referenceAcceleration == 0.0) :
+            (softActive() && fabs(safeVelocity(_jogVelocity)) <= _config.velocityTolerance);
+        if (finishedJog &&
             fabs(_velocity) <= _config.velocityTolerance) {
             _target = _position;
             idle(Completion::STOPPED, _config.endAction == EndAction::HOLD);
         }
     } else if (_mode == Mode::STOPPING) {
         desired = approachVelocity(0.0, dt);
-        if (_referenceVelocity == 0.0 && fabs(_velocity) <= _config.velocityTolerance) {
+        if (_referenceVelocity == 0.0 && _referenceAcceleration == 0.0 &&
+            fabs(_velocity) <= _config.velocityTolerance) {
             _settleUs = accumulate(_settleUs, elapsed, _config.settleTimeUs);
             if (_settleUs >= _config.settleTimeUs) {
                 _target = _position;
@@ -720,6 +827,7 @@ bool Core::tick(uint32_t now, uint32_t raw, const Inputs& inputs) {
             }
         } else _settleUs = 0;
     } else if (_mode == Mode::HOMING) desired = _referenceVelocity;
+    if (_fault != Fault::NONE) return true;
     if (_mode == Mode::IDLE) {
         if (!_holding) {
             if (fabs(_target - _position) > _config.positionTolerance + _config.positionHysteresis ||
@@ -768,6 +876,8 @@ Snapshot Core::snapshot() const {
     s.integral = _integral; s.saturated = _saturated; s.output = _output; s.inputs = _inputs;
     s.absolutePositionCounts = getAbsolutePositionCounts();
     s.relativePositionCounts = getRelativePositionCounts();
+    s.referenceAcceleration = _referenceAcceleration;
+    s.referenceJerk = _referenceJerk;
     return s;
 }
 

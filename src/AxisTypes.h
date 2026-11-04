@@ -71,10 +71,13 @@ struct Config {
     double maxSpeed = 20.0;
     double acceleration = 100.0;
     double deceleration = 100.0;
+    double maxJerk = 1000.0;             // unit/s^3; zero selects legacy trapezoid.
     double positionKp = 8.0;
     double velocityKp = 0.08;           // Normalized duty / (unit/s).
     double velocityKi = 0.4;
     double velocityKd = 0.0;            // Derivative on measured velocity.
+    double velocitySetpointWeight = 0.8; // 2-DOF proportional setpoint weight beta.
+    double velocityDerivativeWeight = 0.0; // Derivative setpoint weight gamma.
     double velocityFeedforward = 0.0;   // Normalized duty / (unit/s).
     double velocityFilterTime = 0.02;   // Seconds; zero disables filtering.
     double derivativeFilterTime = 0.02;
@@ -141,6 +144,8 @@ struct Snapshot {
     Inputs inputs;
     int64_t absolutePositionCounts;
     int64_t relativePositionCounts;
+    double referenceAcceleration;
+    double referenceJerk;
 };
 
 const char* toString(Result value);

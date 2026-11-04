@@ -46,6 +46,9 @@ void setup() {
     config.encoder = axis::EncoderScale::rotary(1440);  // x4 counts/output revolution.
     config.maxSpeed = 90;
     config.acceleration = config.deceleration = 180;
+    config.maxJerk = 1800;  // degrees/s^3.
+    config.velocitySetpointWeight = 0.8;
+    config.velocityDerivativeWeight = 0;
     config.positionTolerance = 0.5;    // One count = 0.25 degrees.
     config.velocityTolerance = 1;
     config.positionHysteresis = 0.5;

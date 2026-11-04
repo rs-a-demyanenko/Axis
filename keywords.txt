@@ -22,3 +22,5 @@ getRelativePositionCounts	KEYWORD2
 setRelativeOrigin	KEYWORD2
 setRelativeOriginCounts	KEYWORD2
 setRelativePosition	KEYWORD2
+setMaxJerk	KEYWORD2
+SCurveProfile	KEYWORD1

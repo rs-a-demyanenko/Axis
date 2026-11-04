@@ -158,6 +158,7 @@ class Axis : protected GyverMotor2<driver, resolution> {
     axis::Result setMaxSpeed(double value) { return _core.setMaxSpeed(value); }
     axis::Result setAcceleration(double value) { return _core.setAcceleration(value); }
     axis::Result setDeceleration(double value) { return _core.setDeceleration(value); }
+    axis::Result setMaxJerk(double value) { return _core.setMaxJerk(value); }
 
     axis::Result setMotorReverse(bool reverse) {
         if (_core.isBusy()) return axis::Result::BUSY;

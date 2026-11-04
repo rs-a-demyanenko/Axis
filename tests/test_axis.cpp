@@ -18,6 +18,8 @@ static axis::Config testConfig() {
     axis::Config c;
     c.encoder = axis::EncoderScale::linear(1000);
     c.maxSpeed = 8;
+    c.maxJerk = 0;  // Preserve explicit coverage of the legacy profile.
+    c.velocitySetpointWeight = 1;
     c.acceleration = c.deceleration = 20;
     c.velocityKp = 0.12;
     c.velocityKi = 0.8;
@@ -124,6 +126,218 @@ static void configuration() {
     CHECK(core.begin(c, 0, 0) == Result::OK);
     CHECK(core.begin(core.getConfig(), 0, 0) == Result::OK);
     NEAR(core.getConfig().acceleration, 17, 1e-12);
+    c = testConfig(); c.maxJerk = -1;
+    CHECK(!axis::Core::validConfig(c));
+    c = testConfig(); c.velocitySetpointWeight = 1.1;
+    CHECK(!axis::Core::validConfig(c));
+    c = testConfig(); c.velocityDerivativeWeight = -0.1;
+    CHECK(!axis::Core::validConfig(c));
+}
+
+static void profileInvariants() {
+    axis::SCurveProfile profile;
+    CHECK(!profile.planPosition(1, 1, 1, 1, 0));
+    CHECK(!profile.planPosition(std::numeric_limits<double>::quiet_NaN(), 1, 1, 1, 1));
+    CHECK(!profile.planVelocity(0, 0, 1, 1, 1, -1));
+    const double lengths[] = {0, 0.00001, 0.1, 1, 50, -0.00001, -0.1, -50};
+    const double speeds[] = {0.2, 2, 10};
+    for (double length : lengths) for (double speed : speeds) {
+        const double acceleration = 4, deceleration = 7, jerk = 30;
+        CHECK(profile.planPosition(length, speed, acceleration, deceleration, jerk));
+        const double duration = profile.duration();
+        axis::MotionState start = profile.sample(0), end = profile.sample(duration);
+        NEAR(start.position, 0, 1e-12); NEAR(start.velocity, 0, 1e-12); NEAR(start.acceleration, 0, 1e-12);
+        NEAR(end.position, length, 1e-12); NEAR(end.velocity, 0, 1e-12); NEAR(end.acceleration, 0, 1e-12);
+        if (duration == 0) continue;
+        const double dt = duration / 2000;
+        axis::MotionState previous = start;
+        double sign = length < 0 ? -1.0 : 1.0;
+        for (unsigned i = 1; i <= 2000; ++i) {
+            axis::MotionState state = profile.sample(dt * i);
+            CHECK(state.position * sign >= -1e-9 && state.position * sign <= fabs(length) + 1e-8);
+            CHECK(state.velocity * sign >= -1e-9 && fabs(state.velocity) <= speed + 1e-8);
+            CHECK(state.acceleration * sign <= acceleration + 1e-8);
+            CHECK(state.acceleration * sign >= -deceleration - 1e-8);
+            CHECK(fabs(state.jerk) <= jerk + 1e-8);
+            CHECK(fabs(state.acceleration - previous.acceleration) <= jerk * dt + 1e-8);
+            NEAR(state.position - previous.position,
+                 0.5 * (state.velocity + previous.velocity) * dt, jerk * dt * dt * dt + 1e-8);
+            previous = state;
+        }
+        NEAR(profile.sample(duration + 1).position, length, 1e-12);
+        // Sampling is analytic: visiting the same time gives the same state.
+        axis::MotionState middle = profile.sample(duration * 0.37);
+        profile.sample(duration * 0.9);
+        NEAR(profile.sample(duration * 0.37).position, middle.position, 1e-12);
+    }
+    const double initialVelocities[] = {-3, 0, 3};
+    const double initialAccelerations[] = {-2, 0, 2};
+    const double targets[] = {-2, 0, 2};
+    for (double velocity : initialVelocities) for (double acceleration : initialAccelerations)
+        for (double target : targets) {
+            CHECK(profile.planVelocity(velocity, acceleration, target, 4, 7, 30));
+            axis::MotionState initial = profile.sample(0);
+            NEAR(initial.velocity, velocity, 1e-12);
+            NEAR(initial.acceleration, acceleration, 1e-12);
+            double total = profile.duration();
+            axis::MotionState end = profile.sample(total);
+            NEAR(end.velocity, target, 1e-12); NEAR(end.acceleration, 0, 1e-12);
+            NEAR(profile.sample(total + 1).position, end.position + target, 1e-9);
+            if (total == 0) continue;
+            axis::MotionState previous = initial;
+            const double dt = total / 1000;
+            for (unsigned i = 1; i <= 1000; ++i) {
+                axis::MotionState state = profile.sample(dt * i);
+                CHECK(fabs(state.jerk) <= 30 + 1e-9);
+                CHECK(fabs(state.acceleration) <= 7 + 1e-9);
+                CHECK(fabs(state.acceleration - previous.acceleration) <= 30 * dt + 1e-8);
+                NEAR(state.velocity - previous.velocity,
+                     0.5 * (previous.acceleration + state.acceleration) * dt, 30 * dt * dt + 1e-8);
+                previous = state;
+            }
+        }
+}
+
+static void smoothCoreAndStops() {
+    axis::Config c = testConfig();
+    c.maxJerk = 100;
+    c.velocitySetpointWeight = 0.8;
+    Plant p(c);
+    p.home();
+    CHECK(p.core.moveTo(10, 3) == Result::OK);
+    double previousAcceleration = p.core.snapshot().referenceAcceleration;
+    for (unsigned i = 0; i < 150 && p.core.isBusy(); ++i) {
+        p.step();
+        axis::Snapshot s = p.core.snapshot();
+        CHECK(fabs(s.referenceAcceleration) <= c.acceleration + 1e-8);
+        CHECK(fabs(s.referenceJerk) <= c.maxJerk + 1e-8);
+        CHECK(fabs(s.referenceAcceleration - previousAcceleration) <= c.maxJerk * 0.005 + 1e-8);
+        previousAcceleration = s.referenceAcceleration;
+    }
+    axis::Snapshot before = p.core.snapshot();
+    CHECK(p.core.stop() == Result::OK);
+    NEAR(p.core.snapshot().referenceVelocity, before.referenceVelocity, 1e-12);
+    NEAR(p.core.snapshot().referenceAcceleration, before.referenceAcceleration, 1e-12);
+    p.finish();
+    CHECK(p.core.getCompletion() == axis::Completion::STOPPED);
+    CHECK(p.core.getPosition() < 10);
+    CHECK(p.core.jog(4) == Result::OK);
+    p.finish(30);
+    CHECK(p.core.getCompletion() == axis::Completion::STOPPED);
+    CHECK(p.core.getPosition() <= c.softMax + c.positionTolerance);
+    CHECK(p.core.getPosition() > c.softMax - 1.0);
+    CHECK(p.core.moveTo(c.softMin, 3) == Result::OK);
+    p.finish(30);
+    NEAR(p.core.getPosition(), c.softMin, c.positionTolerance);
+    CHECK(p.core.moveBy(0.01, 1) == Result::OK);
+    p.finish();
+    CHECK(p.core.moveTo(5, 3) == Result::OK);
+    // Stop during positive acceleration, rather than only on a velocity plateau.
+    p.run(0.08);
+    before = p.core.snapshot();
+    CHECK(before.referenceAcceleration > 0);
+    CHECK(p.core.stop() == Result::OK);
+    previousAcceleration = before.referenceAcceleration;
+    for (unsigned i = 0; i < 400 && p.core.isBusy(); ++i) {
+        p.step();
+        axis::Snapshot s = p.core.snapshot();
+        CHECK(fabs(s.referenceAcceleration - previousAcceleration) <= c.maxJerk * 0.005 + 1e-8);
+        previousAcceleration = s.referenceAcceleration;
+    }
+    p.finish();
+    p.core.disable();
+    CHECK(p.core.setMaxJerk(200) == Result::OK);
+    CHECK(p.core.setMaxJerk(-1) == Result::INVALID_ARGUMENT);
+    CHECK(p.core.setMaxJerk(0) == Result::OK);
+    CHECK(p.core.moveBy(1) == Result::OK);
+    CHECK(p.core.setMaxJerk(200) == Result::BUSY);
+    p.finish();
+    const double jerks[] = {10, 100, 1000};
+    for (double jerk : jerks) {
+        axis::Config limits = testConfig();
+        limits.maxJerk = jerk;
+        limits.velocitySetpointWeight = 0.8;
+        limits.softMax = 5;
+        Plant bounded(limits);
+        bounded.home();
+        CHECK(bounded.core.jog(5) == Result::OK);
+        bounded.finish(30);
+        CHECK(bounded.core.getPosition() <= limits.softMax + limits.positionTolerance);
+        CHECK(bounded.core.getPosition() > limits.softMax - 1.0);
+        CHECK(bounded.core.jog(-5) == Result::OK);
+        bounded.finish(30);
+        CHECK(bounded.core.getPosition() >= limits.softMin - limits.positionTolerance);
+        CHECK(bounded.core.getPosition() < limits.softMin + 1.0);
+    }
+    axis::Config sharedConfig = testConfig();
+    sharedConfig.maxJerk = 100;
+    sharedConfig.home.source = axis::HomeSource::MIN_LIMIT;
+    Plant shared(sharedConfig, -0.2);
+    shared.home();
+    CHECK(shared.core.moveBy(3) == Result::OK);
+    shared.run(0.05);
+    CHECK(shared.core.snapshot().referenceAcceleration > 0);
+    shared.core.emergencyStop();
+    CHECK(shared.core.getFault() == Fault::EMERGENCY_STOP);
+    CHECK(shared.core.getOutput().duty == 0);
+    CHECK(shared.core.getOutput().action == axis::OutputAction::COAST);
+}
+
+static void twoDofController() {
+    axis::Config c = testConfig();
+    c.maxJerk = 100;
+    c.velocityKp = 0.1;
+    c.velocityKi = 0;
+    c.velocityKd = 0;
+    c.velocityFeedforward = 0;
+    c.velocitySetpointWeight = 0.4;
+    c.velocityDerivativeWeight = 0;
+    c.derivativeFilterTime = 0;
+    c.maxFollowingError = c.stallOutput = 0;
+    axis::Core core;
+    CHECK(core.begin(c, 0, 0) == Result::OK);
+    CHECK(core.moveBy(2, 1) == Result::OK);
+    for (uint32_t now = 5000; now <= 100000; now += 5000) {
+        core.tick(now, 0);
+        axis::Snapshot s = core.snapshot();
+        NEAR(s.output.duty, c.velocityKp * (c.velocitySetpointWeight * s.velocityCommand - s.velocity), 1e-12);
+    }
+    axis::Core measurementD, weightedD;
+    c.velocityKd = 0.002;
+    CHECK(measurementD.begin(c, 0, 0) == Result::OK);
+    c.velocityDerivativeWeight = 1;
+    CHECK(weightedD.begin(c, 0, 0) == Result::OK);
+    CHECK(measurementD.moveBy(2, 1) == Result::OK);
+    CHECK(weightedD.moveBy(2, 1) == Result::OK);
+    double previousCommand = 0;
+    for (uint32_t now = 5000; now <= 100000; now += 5000) {
+        measurementD.tick(now, 0); weightedD.tick(now, 0);
+        double command = weightedD.snapshot().velocityCommand;
+        NEAR(measurementD.getOutput().duty, c.velocityKp * c.velocitySetpointWeight * command, 1e-12);
+        NEAR(weightedD.getOutput().duty - measurementD.getOutput().duty,
+             c.velocityKd * (command - previousCommand) / 0.005, 1e-12);
+        previousCommand = command;
+    }
+    c.velocityKp = 0.001;
+    c.velocityKd = 0.00001;
+    c.velocityFilterTime = 0;
+    c.velocityDerivativeWeight = 0.3;
+    axis::Core measured;
+    CHECK(measured.begin(c, 0, 0) == Result::OK);
+    CHECK(measured.moveBy(2, 1) == Result::OK);
+    const uint32_t counts[] = {0, 1, 3, 3, 2, 4};
+    double previousMeasured = 0;
+    previousCommand = 0;
+    for (unsigned i = 0; i < sizeof(counts) / sizeof(counts[0]); ++i) {
+        measured.tick((i + 1) * 5000, counts[i]);
+        axis::Snapshot s = measured.snapshot();
+        double expected = c.velocityKp * (c.velocitySetpointWeight * s.velocityCommand - s.velocity) +
+            c.velocityKd * (c.velocityDerivativeWeight * (s.velocityCommand - previousCommand) -
+                            (s.velocity - previousMeasured)) / 0.005;
+        NEAR(s.output.duty, expected, 1e-12);
+        previousCommand = s.velocityCommand;
+        previousMeasured = s.velocity;
+    }
 }
 
 static void relativeAndProfiles() {
@@ -581,6 +795,7 @@ static void realGyverAdapter() {
 }
 
 int main() {
+    profileInvariants(); smoothCoreAndStops(); twoDofController();
     configuration(); relativeAndProfiles(); homingAndCoordinates(); stopAndSoftLimits();
     hardLimitsAndRecovery(); faultsAndTiming(); counterWrapAndEncoder(); completionAndHolding();
     stopDuringRecovery(); rotary(); absoluteAndRelativePositions(); realGyverAdapter();
