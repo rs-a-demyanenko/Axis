@@ -139,6 +139,8 @@ struct Snapshot {
     bool saturated;
     Output output;
     Inputs inputs;
+    int64_t absolutePositionCounts;
+    int64_t relativePositionCounts;
 };
 
 const char* toString(Result value);

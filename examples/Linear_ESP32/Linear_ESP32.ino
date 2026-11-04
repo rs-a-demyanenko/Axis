@@ -2,6 +2,7 @@
 // Other ESP32 variants: adapt ALL GPIO assignments to your module.
 // Serial 115200: h home; a absolute 20 mm; r/l relative +/-5 mm;
 // j jog; s stop; d disable; c clear fault; + / - limit recovery; e emergency.
+// z zero relative position; o/O relative origin at +/-20 mm; p read positions.
 #include <Axis.h>
 
 const uint8_t ENC_A = 32, ENC_B = 33;
@@ -24,6 +25,26 @@ uint32_t readEncoder(void*) {
 
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
+}
+
+void printCount(int64_t value) {
+    char digits[22];
+    uint8_t index = sizeof(digits) - 1;
+    digits[index] = '\0';
+    uint64_t magnitude = value < 0 ? static_cast<uint64_t>(-(value + 1)) + 1 : static_cast<uint64_t>(value);
+    do { digits[--index] = '0' + magnitude % 10; magnitude /= 10; } while (magnitude);
+    if (value < 0) digits[--index] = '-';
+    Serial.print(digits + index);
+}
+
+void reportPositions() {
+    if (machineAxis.isBusy()) { report(axis::Result::BUSY); return; }
+    if (Serial.availableForWrite() < 60) return;
+    Serial.print("H:"); Serial.println(machineAxis.isHomed());
+    Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 3);
+    Serial.print(" mm "); printCount(machineAxis.getAbsolutePositionCounts()); Serial.println(" cnt");
+    Serial.print("R:"); Serial.print(machineAxis.getRelativePosition(), 3);
+    Serial.print(" mm "); printCount(machineAxis.getRelativePositionCounts()); Serial.println(" cnt");
 }
 
 void setup() {
@@ -69,6 +90,10 @@ void loop() {
             case 's': report(machineAxis.stop()); break;
             case 'd': machineAxis.disable(); break;
             case 'c': report(machineAxis.clearFault()); break;
+            case 'z': report(machineAxis.setRelativePosition()); break;
+            case 'o': report(machineAxis.setRelativeOrigin(20)); break;
+            case 'O': report(machineAxis.setRelativeOrigin(-20)); break;
+            case 'p': reportPositions(); break;
             case '+': report(machineAxis.recoverFromLimit(1, 2)); break;
             case '-': report(machineAxis.recoverFromLimit(-1, 2)); break;
             case 'e': machineAxis.emergencyStop(); break;
@@ -77,7 +102,8 @@ void loop() {
     static uint32_t lastReport = 0;
     if (millis() - lastReport >= 200 && Serial.availableForWrite() >= 60) {
         lastReport = millis();
-        Serial.print("P:"); Serial.print(machineAxis.getPosition(), 2);
+        Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 2);
+        Serial.print(" R:"); Serial.print(machineAxis.getRelativePosition(), 2);
         Serial.print(" V:"); Serial.print(machineAxis.getVelocity(), 2);
         Serial.print(" M:"); Serial.print(static_cast<int>(machineAxis.getMode()));
         Serial.print(" F:"); Serial.println(static_cast<int>(machineAxis.getFault()));

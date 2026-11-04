@@ -15,3 +15,10 @@ recoverFromLimit	KEYWORD2
 setWorkPosition	KEYWORD2
 clearFault	KEYWORD2
 snapshot	KEYWORD2
+getAbsolutePosition	KEYWORD2
+getRelativePosition	KEYWORD2
+getAbsolutePositionCounts	KEYWORD2
+getRelativePositionCounts	KEYWORD2
+setRelativeOrigin	KEYWORD2
+setRelativeOriginCounts	KEYWORD2
+setRelativePosition	KEYWORD2

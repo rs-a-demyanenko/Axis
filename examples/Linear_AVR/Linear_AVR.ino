@@ -1,7 +1,8 @@
 // Arduino Uno/Nano ATmega328P. A/B encoder on both external interrupts.
 // Serial 115200: h home; a absolute 20 mm; r/l relative +/-5 mm;
 // j jog +2 mm/s; s stop; d disable; b brake; c clear fault;
-// z set current work coordinate to zero; w move to work +5 mm;
+// z zero relative position; o/O relative origin at +/-20 mm; p read positions;
+// w move to work +5 mm;
 // + recover from MIN; - recover from MAX; e emergency stop.
 #include <Axis.h>
 #include <util/atomic.h>
@@ -20,6 +21,27 @@ uint32_t readEncoder(void*) {
 
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
+}
+
+// Print supports 32-bit long on AVR; format int64_t without truncation.
+void printCount(int64_t value) {
+    char digits[22];
+    uint8_t index = sizeof(digits) - 1;
+    digits[index] = '\0';
+    uint64_t magnitude = value < 0 ? static_cast<uint64_t>(-(value + 1)) + 1 : static_cast<uint64_t>(value);
+    do { digits[--index] = '0' + magnitude % 10; magnitude /= 10; } while (magnitude);
+    if (value < 0) digits[--index] = '-';
+    Serial.print(digits + index);
+}
+
+void reportPositions() {
+    if (machineAxis.isBusy()) { report(axis::Result::BUSY); return; }
+    if (Serial.availableForWrite() < 60) return;
+    Serial.print("H:"); Serial.println(machineAxis.isHomed());
+    Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 3);
+    Serial.print(" mm "); printCount(machineAxis.getAbsolutePositionCounts()); Serial.println(" cnt");
+    Serial.print("R:"); Serial.print(machineAxis.getRelativePosition(), 3);
+    Serial.print(" mm "); printCount(machineAxis.getRelativePositionCounts()); Serial.println(" cnt");
 }
 
 void setup() {
@@ -71,7 +93,10 @@ void loop() {
             case 'd': machineAxis.disable(); break;
             case 'b': machineAxis.brake(); break;
             case 'c': report(machineAxis.clearFault()); break;
-            case 'z': report(machineAxis.setWorkPosition(0)); break;
+            case 'z': report(machineAxis.setRelativePosition()); break;
+            case 'o': report(machineAxis.setRelativeOrigin(20)); break;
+            case 'O': report(machineAxis.setRelativeOrigin(-20)); break;
+            case 'p': reportPositions(); break;
             case 'w': report(machineAxis.moveTo(5, 2, axis::Frame::WORK)); break;
             case '+': report(machineAxis.recoverFromLimit(1, 2)); break;
             case '-': report(machineAxis.recoverFromLimit(-1, 2)); break;
@@ -81,7 +106,8 @@ void loop() {
     static uint32_t lastReport = 0;
     if (millis() - lastReport >= 200 && Serial.availableForWrite() >= 60) {
         lastReport = millis();
-        Serial.print("P:"); Serial.print(machineAxis.getPosition(), 2);
+        Serial.print("A:"); Serial.print(machineAxis.getAbsolutePosition(), 2);
+        Serial.print(" R:"); Serial.print(machineAxis.getRelativePosition(), 2);
         Serial.print(" V:"); Serial.print(machineAxis.getVelocity(), 2);
         Serial.print(" M:"); Serial.print(static_cast<int>(machineAxis.getMode()));
         Serial.print(" F:"); Serial.println(static_cast<int>(machineAxis.getFault()));

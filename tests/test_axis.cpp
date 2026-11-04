@@ -50,7 +50,8 @@ struct Plant {
         CHECK(core.begin(config, now, count(), inputs) == Result::OK);
     }
     uint32_t count() const {
-        return static_cast<uint32_t>(static_cast<int64_t>(llround(position * config.encoder.countsPerUnit)));
+        double sign = config.encoder.inverted ? -1.0 : 1.0;
+        return static_cast<uint32_t>(static_cast<int64_t>(llround(sign * position * config.encoder.countsPerUnit)));
     }
     void sensors() {
         if (!switches) return;
@@ -417,6 +418,120 @@ struct ReaderData { uint32_t count = 0; axis::Inputs inputs; };
 static uint32_t readCount(void* context) { return static_cast<ReaderData*>(context)->count; }
 static axis::Inputs readInputs(void* context) { return static_cast<ReaderData*>(context)->inputs; }
 
+static void absoluteAndRelativePositions() {
+    axis::Core core;
+    CHECK(core.setRelativePosition() == Result::NOT_INITIALIZED);
+    CHECK(core.setRelativeOrigin(1) == Result::NOT_INITIALIZED);
+    CHECK(core.setRelativeOriginCounts(1) == Result::NOT_INITIALIZED);
+    CHECK(core.begin(testConfig(), 0, 0) == Result::OK);
+    core.tick(1, 123);
+    NEAR(core.getAbsolutePosition(), 0.123, 1e-12);
+    CHECK(core.getAbsolutePositionCounts() == 123);
+    CHECK(core.setRelativeOrigin(-2) == Result::NOT_HOMED);
+    CHECK(core.setRelativeOriginCounts(-2000) == Result::NOT_HOMED);
+    CHECK(core.setRelativePosition() == Result::OK);
+    NEAR(core.getRelativePosition(), 0, 1e-12);
+    CHECK(core.getRelativePositionCounts() == 0);
+    core.tick(2, 124);
+    NEAR(core.getRelativePosition(), 0.001, 1e-12);
+    CHECK(core.getRelativePositionCounts() == 1);
+    core.tick(3, 100);
+    NEAR(core.getRelativePosition(), -0.023, 1e-12);
+    CHECK(core.getRelativePositionCounts() == -23);
+
+    Plant p;
+    p.home();
+    const double absolute = p.core.getAbsolutePosition();
+    const int64_t pulses = p.core.getAbsolutePositionCounts();
+    CHECK(p.core.getCounts() != pulses);  // Home offset differs from raw startup count.
+    CHECK(p.core.setRelativeOrigin(20) == Result::OK);
+    NEAR(p.core.getAbsolutePosition(), absolute, 1e-12);
+    NEAR(p.core.getRelativePosition(), absolute - 20, 1e-12);
+    CHECK(p.core.getRelativePosition() < 0);
+    CHECK(p.core.getRelativePositionCounts() == pulses - 20000);
+    CHECK(p.core.setRelativeOrigin(-10) == Result::OK);
+    NEAR(p.core.getRelativePosition(), absolute + 10, 1e-12);
+    CHECK(p.core.getRelativePosition() > 0);
+    CHECK(p.core.getRelativePositionCounts() == pulses + 10000);
+    CHECK(p.core.setRelativeOriginCounts(-2500) == Result::OK);
+    NEAR(p.core.getRelativePosition(), absolute + 2.5, 1e-12);
+    CHECK(p.core.getRelativePositionCounts() == pulses + 2500);
+
+    // Integer origins preserve an individual pulse beyond double precision.
+    const int64_t largeOrigin = 9007199254740993LL;
+    CHECK(p.core.setRelativeOriginCounts(largeOrigin) == Result::OK);
+    CHECK(p.core.getRelativePositionCounts() == pulses - largeOrigin);
+    CHECK(p.core.setRelativeOriginCounts(INT64_MIN) == Result::OK);
+    CHECK(p.core.getRelativePositionCounts() == (pulses >= 0 ? INT64_MAX : (INT64_MAX + pulses) + 1));
+    CHECK(p.core.setRelativePosition(-3.25) == Result::OK);
+    NEAR(p.core.getRelativePosition(), -3.25, 1e-12);
+    CHECK(p.core.getRelativePositionCounts() == -3250);
+    CHECK(p.core.setRelativePosition(5) == Result::OK);
+    CHECK(p.core.getRelativePositionCounts() == 5000);
+    CHECK(p.core.setRelativePosition() == Result::OK);
+    CHECK(p.core.getRelativePositionCounts() == 0);
+    CHECK(p.core.setWorkPosition(1.5) == Result::OK);
+    NEAR(p.core.getRelativePosition(), p.core.getWorkPosition(), 1e-12);
+    CHECK(p.core.getRelativePositionCounts() == 1500);
+    CHECK(p.core.setRelativePosition(0.0006) == Result::OK);
+    NEAR(p.core.getRelativePosition(), 0.0006, 1e-12);
+    CHECK(p.core.getRelativePositionCounts() == 1);  // Quantized to one count.
+    CHECK(p.core.setRelativeOrigin(0.0006) == Result::OK);
+    CHECK(p.core.getRelativePositionCounts() == pulses - 1);
+    CHECK(p.core.setRelativeOrigin(std::numeric_limits<double>::infinity()) == Result::INVALID_ARGUMENT);
+    CHECK(p.core.setRelativePosition(std::numeric_limits<double>::quiet_NaN()) == Result::INVALID_ARGUMENT);
+    CHECK(p.core.setRelativeOrigin(1e30) == Result::INVALID_ARGUMENT);
+    CHECK(p.core.setRelativePosition(1e30) == Result::INVALID_ARGUMENT);
+    CHECK(p.core.getRelativePositionCounts() == pulses - 1);  // Failed writes are atomic.
+
+    CHECK(p.core.setWorkPosition(1.5) == Result::OK);
+    CHECK(p.core.moveTo(2.5, 1, axis::Frame::WORK) == Result::OK);
+    NEAR(p.core.getTarget(), absolute + 1, 1e-12);
+    CHECK(p.core.setRelativePosition() == Result::BUSY);
+    CHECK(p.core.setRelativeOrigin(-1) == Result::BUSY);
+    CHECK(p.core.setRelativeOriginCounts(-1000) == Result::BUSY);
+    p.finish();
+    NEAR(p.core.getRelativePosition(), 2.5, p.config.positionTolerance);
+    CHECK(p.core.getAbsolutePositionCounts() == llround(p.core.getAbsolutePosition() * 1000));
+    axis::Snapshot s = p.core.snapshot();
+    CHECK(s.absolutePositionCounts == p.core.getAbsolutePositionCounts());
+    CHECK(s.relativePositionCounts == p.core.getRelativePositionCounts());
+    CHECK(p.core.moveTo(100) == Result::OUT_OF_RANGE);  // Origin never changes soft limits.
+    CHECK(p.core.setRelativeOrigin(-10) == Result::OK);
+    p.home();
+    CHECK(p.core.getRelativePositionCounts() == p.core.getAbsolutePositionCounts());
+    NEAR(p.core.getRelativePosition(), p.core.getAbsolutePosition(), 1e-12);
+    CHECK(p.core.setRelativeOrigin(2) == Result::OK);
+    p.core.invalidateReference();
+    CHECK(p.core.getRelativePositionCounts() == p.core.getAbsolutePositionCounts());
+
+    axis::Config inverted = testConfig();
+    inverted.encoder.inverted = true;
+    CHECK(core.begin(inverted, 0, 0xfffffff0UL) == Result::OK);
+    core.tick(1, 0x10);
+    CHECK(core.getCounts() == 32);
+    CHECK(core.getAbsolutePositionCounts() == -32);
+    NEAR(core.getAbsolutePosition(), -0.032, 1e-12);
+    CHECK(core.setRelativePosition() == Result::OK);
+    core.tick(2, 0x12);
+    CHECK(core.getRelativePositionCounts() == -2);
+    NEAR(core.getRelativePosition(), -0.002, 1e-12);
+
+    Plant invertedPlant(inverted);
+    invertedPlant.home();
+    CHECK(invertedPlant.core.getAbsolutePositionCounts() == llround(invertedPlant.core.getAbsolutePosition() * 1000));
+    CHECK(invertedPlant.core.setRelativeOriginCounts(-1000) == Result::OK);
+    CHECK(invertedPlant.core.getRelativePositionCounts() == invertedPlant.core.getAbsolutePositionCounts() + 1000);
+
+    CHECK(core.begin(testConfig(), 0, 0) == Result::OK);
+    core.tick(1, 0x7ffffffeUL);
+    core.tick(2, 0x80000000UL);
+    CHECK(core.getAbsolutePositionCounts() == 2147483648LL);
+    CHECK(core.setRelativePosition() == Result::OK);
+    core.tick(3, 0x80000001UL);
+    CHECK(core.getRelativePositionCounts() == 1);
+}
+
 static void realGyverAdapter() {
     ReaderData reader;
     Axis<GM2::DIR_PWM> motor(4, 5);
@@ -424,6 +539,20 @@ static void realGyverAdapter() {
     CHECK(motor.attachEncoder(readCount, &reader) == Result::OK);
     CHECK(motor.attachInputs(readInputs, &reader) == Result::OK);
     CHECK(motor.begin(testConfig()) == Result::OK);
+    reader.count = 123;
+    motor.tick();
+    CHECK(motor.getAbsolutePositionCounts() == 123);
+    NEAR(motor.getAbsolutePosition(), 0.123, 1e-12);
+    CHECK(motor.setRelativePosition() == Result::OK);
+    reader.count = 100;
+    motor.tick();
+    CHECK(motor.getRelativePositionCounts() == -23);
+    NEAR(motor.getRelativePosition(), -0.023, 1e-12);
+    CHECK(motor.setRelativeOrigin(1) == Result::NOT_HOMED);
+    CHECK(motor.setRelativeOriginCounts(1000) == Result::NOT_HOMED);
+    reader.count = 0;
+    motor.tick();
+    CHECK(motor.setRelativePosition() == Result::OK);
     CHECK(motor.moveBy(1) == Result::OK);
     for (unsigned i = 0; i < 20; ++i) { mockMicros += 5000; motor.tick(); }
     CHECK(mockPwm[5] > 0);
@@ -454,7 +583,7 @@ static void realGyverAdapter() {
 int main() {
     configuration(); relativeAndProfiles(); homingAndCoordinates(); stopAndSoftLimits();
     hardLimitsAndRecovery(); faultsAndTiming(); counterWrapAndEncoder(); completionAndHolding();
-    stopDuringRecovery(); rotary(); realGyverAdapter();
+    stopDuringRecovery(); rotary(); absoluteAndRelativePositions(); realGyverAdapter();
     printf("PASS: %d checks; sizeof(axis::Core)=%zu bytes on host\n", checks, sizeof(axis::Core));
     return 0;
 }

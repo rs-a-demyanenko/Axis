@@ -11,6 +11,30 @@ bool finiteValue(double x) { return isfinite(x); }
 bool positive(double x) { return finiteValue(x) && x > 0.0; }
 bool nonnegative(double x) { return finiteValue(x) && x >= 0.0; }
 bool duration(uint32_t x) { return x > 0 && x < 0x80000000UL; }
+// Counts remain integer even where floating point no longer resolves one pulse.
+bool countsFit(double value) {
+    return finiteValue(value) && value >= -9223372036854775808.0 && value < 9223372036854775808.0;
+}
+int64_t roundedCounts(double value) {
+    if (isnan(value)) return 0;
+    if (value >= 9223372036854775808.0) return INT64_MAX;
+    if (value <= -9223372036854775808.0) return INT64_MIN;
+    value = round(value);
+    if (value >= 9223372036854775808.0) return INT64_MAX;
+    return static_cast<int64_t>(value);
+}
+bool subtractionFits(int64_t a, int64_t b) {
+    return !((b > 0 && a < INT64_MIN + b) || (b < 0 && a > INT64_MAX + b));
+}
+int64_t subtractCounts(int64_t a, int64_t b) {
+    if (!subtractionFits(a, b)) return b > 0 ? INT64_MIN : INT64_MAX;
+    return a - b;
+}
+int64_t addCounts(int64_t a, int64_t b) {
+    if (b > 0 && a > INT64_MAX - b) return INT64_MAX;
+    if (b < 0 && a < INT64_MIN - b) return INT64_MIN;
+    return a + b;
+}
 uint32_t accumulate(uint32_t value, uint32_t step, uint32_t limit) {
     return value >= limit || step >= limit - value ? limit : value + step;
 }
@@ -102,6 +126,16 @@ double Core::signedScale() const {
 
 void Core::updatePosition() {
     _position = _originPosition + static_cast<double>(_counts - _originCounts) * signedScale();
+}
+
+int64_t Core::getAbsolutePositionCounts() const {
+    int64_t delta = subtractCounts(_counts, _originCounts);
+    if (_config.encoder.inverted) delta = subtractCounts(0, delta);
+    return addCounts(delta, roundedCounts(_originPosition * _config.encoder.countsPerUnit));
+}
+
+int64_t Core::getRelativePositionCounts() const {
+    return subtractCounts(getAbsolutePositionCounts(), _workOffsetCounts);
 }
 
 bool Core::homeRaw(const Inputs& inputs) const {
@@ -248,6 +282,7 @@ Result Core::home() {
         (_config.home.source != HomeSource::MAX_LIMIT && maxActive())) return Result::LIMIT_ACTIVE;
     _homed = _referenced = _holding = false;
     _workOffset = 0.0;
+    _workOffsetCounts = 0;
     resetController();
     _referencePosition = _position;
     _referenceVelocity = 0.0;
@@ -355,14 +390,49 @@ void Core::invalidateReference() {
     disable();
     _homed = _referenced = false;
     _workOffset = 0.0;
+    _workOffsetCounts = 0;
 }
 
 Result Core::setWorkPosition(double position) {
     Result result = ready();
     if (result != Result::OK) return result;
     if (!_homed) return Result::NOT_HOMED;
-    if (!finiteValue(position)) return Result::INVALID_ARGUMENT;
-    _workOffset = _position - position;
+    return setRelativePosition(position);
+}
+
+Result Core::setRelativePosition(double position) {
+    Result result = ready();
+    if (result != Result::OK) return result;
+    const double offset = _position - position;
+    const double scaled = position * _config.encoder.countsPerUnit;
+    if (!finiteValue(offset) || !countsFit(scaled)) return Result::INVALID_ARGUMENT;
+    const int64_t absolute = getAbsolutePositionCounts();
+    const int64_t relative = roundedCounts(scaled);
+    if (!subtractionFits(absolute, relative)) return Result::INVALID_ARGUMENT;
+    _workOffset = offset;
+    _workOffsetCounts = absolute - relative;
+    return Result::OK;
+}
+
+Result Core::setRelativeOrigin(double absolutePosition) {
+    Result result = ready();
+    if (result != Result::OK) return result;
+    if (!_homed) return Result::NOT_HOMED;
+    const double scaled = absolutePosition * _config.encoder.countsPerUnit;
+    if (!finiteValue(_position - absolutePosition) || !countsFit(scaled)) return Result::INVALID_ARGUMENT;
+    _workOffset = absolutePosition;
+    _workOffsetCounts = roundedCounts(scaled);
+    return Result::OK;
+}
+
+Result Core::setRelativeOriginCounts(int64_t absoluteCounts) {
+    Result result = ready();
+    if (result != Result::OK) return result;
+    if (!_homed) return Result::NOT_HOMED;
+    const double offset = static_cast<double>(absoluteCounts) / _config.encoder.countsPerUnit;
+    if (!finiteValue(offset) || !finiteValue(_position - offset)) return Result::INVALID_ARGUMENT;
+    _workOffset = offset;
+    _workOffsetCounts = absoluteCounts;
     return Result::OK;
 }
 
@@ -696,6 +766,8 @@ Snapshot Core::snapshot() const {
     s.target = _target; s.referencePosition = _referencePosition; s.referenceVelocity = _referenceVelocity;
     s.followingError = _referencePosition - _position; s.velocityCommand = _velocityCommand;
     s.integral = _integral; s.saturated = _saturated; s.output = _output; s.inputs = _inputs;
+    s.absolutePositionCounts = getAbsolutePositionCounts();
+    s.relativePositionCounts = getRelativePositionCounts();
     return s;
 }
 

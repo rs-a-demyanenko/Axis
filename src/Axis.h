@@ -143,6 +143,18 @@ class Axis : protected GyverMotor2<driver, resolution> {
         if (!refresh()) return axis::Result::NOT_INITIALIZED;
         return _core.setWorkPosition(position);
     }
+    axis::Result setRelativePosition(double position = 0.0) {
+        if (!refresh()) return axis::Result::NOT_INITIALIZED;
+        return _core.setRelativePosition(position);
+    }
+    axis::Result setRelativeOrigin(double absolutePosition) {
+        if (!refresh()) return axis::Result::NOT_INITIALIZED;
+        return _core.setRelativeOrigin(absolutePosition);
+    }
+    axis::Result setRelativeOriginCounts(int64_t absoluteCounts) {
+        if (!refresh()) return axis::Result::NOT_INITIALIZED;
+        return _core.setRelativeOriginCounts(absoluteCounts);
+    }
     axis::Result setMaxSpeed(double value) { return _core.setMaxSpeed(value); }
     axis::Result setAcceleration(double value) { return _core.setAcceleration(value); }
     axis::Result setDeceleration(double value) { return _core.setDeceleration(value); }
@@ -168,6 +180,10 @@ class Axis : protected GyverMotor2<driver, resolution> {
     bool inPosition() const { return _core.inPosition(); }
     double getPosition() const { return _core.getPosition(); }
     double getWorkPosition() const { return _core.getWorkPosition(); }
+    double getAbsolutePosition() const { return _core.getAbsolutePosition(); }
+    double getRelativePosition() const { return _core.getRelativePosition(); }
+    int64_t getAbsolutePositionCounts() const { return _core.getAbsolutePositionCounts(); }
+    int64_t getRelativePositionCounts() const { return _core.getRelativePositionCounts(); }
     double getVelocity() const { return _core.getVelocity(); }
     double getTarget() const { return _core.getTarget(); }
     double getAngle() const { return _core.getAngle(); }

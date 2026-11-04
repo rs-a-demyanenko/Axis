@@ -26,6 +26,11 @@ class Core {
     void brake();
     void invalidateReference();
     Result setWorkPosition(double position);
+    // Work/relative frame: position = absolute position - relative origin.
+    // A relative reading can be zeroed before homing; an absolute origin needs Home.
+    Result setRelativePosition(double position = 0.0);
+    Result setRelativeOrigin(double absolutePosition);
+    Result setRelativeOriginCounts(int64_t absoluteCounts);
     Result setMaxSpeed(double speed);
     Result setAcceleration(double acceleration);
     Result setDeceleration(double deceleration);
@@ -36,6 +41,13 @@ class Core {
     bool inPosition() const { return _inPosition; }
     double getPosition() const { return _position; }
     double getWorkPosition() const { return _position - _workOffset; }
+    // Physical units: millimeters on linear axes, degrees on rotary axes.
+    // Before isHomed(), the absolute frame is provisional (relative to begin()).
+    double getAbsolutePosition() const { return getPosition(); }
+    double getRelativePosition() const { return getWorkPosition(); }
+    // Signed encoder counts in these coordinate frames, not raw getCounts().
+    int64_t getAbsolutePositionCounts() const;
+    int64_t getRelativePositionCounts() const;
     double getVelocity() const { return _velocity; }
     double getTarget() const { return _target; }
     double getAngle() const;
@@ -71,6 +83,7 @@ class Core {
     uint32_t _lastRaw = 0, _lastSampleUs = 0, _nowUs = 0;
     uint32_t _settleUs = 0, _followingUs = 0, _stallUs = 0, _homeStartedUs = 0;
     int64_t _counts = 0, _originCounts = 0, _sampleCounts = 0;
+    int64_t _workOffsetCounts = 0;
     double _originPosition = 0.0, _position = 0.0, _samplePosition = 0.0;
     double _workOffset = 0.0, _velocity = 0.0, _previousVelocity = 0.0;
     double _derivative = 0.0, _integral = 0.0, _velocityCommand = 0.0;
