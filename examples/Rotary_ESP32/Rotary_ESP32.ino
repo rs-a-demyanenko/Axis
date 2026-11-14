@@ -1,26 +1,14 @@
+// Arduino-ESP32 3.x; hardware PCNT x4 encoder.
 // Classic ESP32; continuous rotary axis, A/B encoder on the OUTPUT shaft.
 // Serial 115200: h home; a shortest path to 10 degrees;
 // p positive path to 350 degrees; n negative path to 10 degrees;
 // r two full turns; s stop; d disable; c clear fault.
 #include <Axis.h>
+#include <AxisPcntEncoder.h>
 
 const uint8_t ENC_A = 32, ENC_B = 33;
 Axis<GM2::PWM_PWM_SPEED> rotaryAxis(25, 26);
-axis::Quadrature encoder;
-portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
-
-void ARDUINO_ISR_ATTR encoderISR() {
-    portENTER_CRITICAL_ISR(&encoderMux);
-    encoder.update(digitalRead(ENC_A), digitalRead(ENC_B));
-    portEXIT_CRITICAL_ISR(&encoderMux);
-}
-
-uint32_t readEncoder(void*) {
-    portENTER_CRITICAL(&encoderMux);
-    uint32_t count = encoder.readUnsafe();
-    portEXIT_CRITICAL(&encoderMux);
-    return count;
-}
+axis::PcntEncoder encoder;
 
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
@@ -30,10 +18,8 @@ void setup() {
     Serial.begin(115200);
     pinMode(ENC_A, INPUT_PULLUP);
     pinMode(ENC_B, INPUT_PULLUP);
-    encoder.begin(digitalRead(ENC_A), digitalRead(ENC_B));
-    attachInterrupt(digitalPinToInterrupt(ENC_A), encoderISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_B), encoderISR, CHANGE);
-    rotaryAxis.attachEncoder(readEncoder);
+    ESP_ERROR_CHECK(encoder.begin(ENC_A, ENC_B));
+    rotaryAxis.attachEncoder(axis::PcntEncoder::reader, &encoder);
     axis::Pins pins;
     pins.home = axis::InputPin(21);
     pins.emergency = axis::InputPin(22);

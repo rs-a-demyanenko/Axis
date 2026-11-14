@@ -1,27 +1,14 @@
-// Classic ESP32 Dev Module. Arduino-ESP32 2.x / 3.x analogWrite API.
+// Classic ESP32 Dev Module. Arduino-ESP32 3.x; hardware PCNT x4 encoder.
 // Other ESP32 variants: adapt ALL GPIO assignments to your module.
 // Serial 115200: h home; a absolute 20 mm; r/l relative +/-5 mm;
 // j jog; s stop; d disable; c clear fault; + / - limit recovery; e emergency.
 // z zero relative position; o/O relative origin at +/-20 mm; p read positions.
 #include <Axis.h>
+#include <AxisPcntEncoder.h>
 
 const uint8_t ENC_A = 32, ENC_B = 33;
 Axis<GM2::DIR_PWM> machineAxis(26, 25);
-axis::Quadrature encoder;
-portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
-
-void ARDUINO_ISR_ATTR encoderISR() {
-    portENTER_CRITICAL_ISR(&encoderMux);
-    encoder.update(digitalRead(ENC_A), digitalRead(ENC_B));
-    portEXIT_CRITICAL_ISR(&encoderMux);
-}
-
-uint32_t readEncoder(void*) {
-    portENTER_CRITICAL(&encoderMux);
-    uint32_t count = encoder.readUnsafe();
-    portEXIT_CRITICAL(&encoderMux);
-    return count;
-}
+axis::PcntEncoder encoder;
 
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
@@ -51,10 +38,8 @@ void setup() {
     Serial.begin(115200);
     pinMode(ENC_A, INPUT_PULLUP);
     pinMode(ENC_B, INPUT_PULLUP);
-    encoder.begin(digitalRead(ENC_A), digitalRead(ENC_B));
-    attachInterrupt(digitalPinToInterrupt(ENC_A), encoderISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENC_B), encoderISR, CHANGE);
-    machineAxis.attachEncoder(readEncoder);
+    ESP_ERROR_CHECK(encoder.begin(ENC_A, ENC_B));
+    machineAxis.attachEncoder(axis::PcntEncoder::reader, &encoder);
 
     axis::Pins pins;
     pins.minLimit = axis::InputPin(18);

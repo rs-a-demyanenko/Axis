@@ -1,14 +1,17 @@
 // Uno/Nano or ESP32/S3: STEP/DIR with a quadrature encoder.
 // Verify every GPIO against your module. Serial: h home; r/l +/-1 mm; s stop.
 #include <AxisStepper.h>
+#include <AxisPcntEncoder.h>
 #if defined(ARDUINO_ARCH_AVR)
 #include <util/atomic.h>
 #endif
 
 const uint8_t ENC_A = 2, ENC_B = 3;
 AxisStepper<STEPPER2WIRE> machineAxis(5, 6, 7);
+#if AXIS_HAS_PCNT
+axis::PcntEncoder encoder;
+#else
 axis::Quadrature encoder;
-
 #if defined(ARDUINO_ARCH_ESP32)
 portMUX_TYPE encoderMux = portMUX_INITIALIZER_UNLOCKED;
 void ARDUINO_ISR_ATTR encoderISR() {
@@ -34,6 +37,7 @@ uint32_t readEncoder(void*) {
 #endif
     return count;
 }
+#endif
 
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
@@ -42,10 +46,15 @@ void report(axis::Result result) {
 void setup() {
     Serial.begin(115200);
     pinMode(ENC_A, INPUT_PULLUP); pinMode(ENC_B, INPUT_PULLUP);
+#if AXIS_HAS_PCNT
+    ESP_ERROR_CHECK(encoder.begin(ENC_A, ENC_B));
+    machineAxis.attachEncoder(axis::PcntEncoder::reader, &encoder);
+#else
     encoder.begin(digitalRead(ENC_A), digitalRead(ENC_B));
     attachInterrupt(digitalPinToInterrupt(ENC_A), encoderISR, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ENC_B), encoderISR, CHANGE);
     machineAxis.attachEncoder(readEncoder);
+#endif
     machineAxis.setStepsPerUnit(640);  // 200 * 16 microsteps / 5 mm.
     axis::Pins pins;
     pins.home = axis::InputPin(10);

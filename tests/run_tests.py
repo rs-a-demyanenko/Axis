@@ -95,6 +95,15 @@ def main():
     environment['ZIG_LOCAL_CACHE_DIR'] = str(BUILD / 'zig-cache')
     subprocess.run(command, cwd=BUILD, env=environment, check=True)
     subprocess.run([str(output)], cwd=ROOT, check=True)
+    pcnt_output = BUILD / ('pcnt_tests.exe' if os.name == 'nt' else 'pcnt_tests')
+    pcnt_command = cc + ['-std=c++11', '-Wall', '-Wextra', '-Werror', '-pedantic',
+                         '-DARDUINO_ARCH_ESP32', '-I' + str(ROOT / 'src'),
+                         '-I' + str(ROOT / 'tests' / 'pcnt_support'),
+                         str(ROOT / 'tests' / 'test_pcnt.cpp'), '-o', str(pcnt_output)]
+    if args.sanitize:
+        pcnt_command += ['-fsanitize=undefined', '-fno-sanitize-recover=all']
+    subprocess.run(pcnt_command, cwd=BUILD, env=environment, check=True)
+    subprocess.run([str(pcnt_output)], cwd=ROOT, check=True)
 
 
 if __name__ == '__main__':

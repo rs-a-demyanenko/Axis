@@ -1,5 +1,6 @@
 Axis	KEYWORD1
 Quadrature	KEYWORD1
+PcntEncoder	KEYWORD1
 home	KEYWORD2
 moveTo	KEYWORD2
 moveBy	KEYWORD2

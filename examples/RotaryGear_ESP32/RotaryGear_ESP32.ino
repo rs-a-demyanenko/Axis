@@ -1,26 +1,15 @@
+// Arduino-ESP32 3.x; hardware PCNT x4 encoders.
 // Classic ESP32 WROOM: rotary A is master, linear Z follows 1 mm per A turn.
 // h home A and Z; g engage at rest; m A+360 degrees; s stop A while staying geared;
 // u disengage and stop both; c clear faults; e emergency stop both.
 // Encoder A on GPIO34/35: use external pull-ups for open-collector outputs.
 #include <Axis.h>
+#include <AxisPcntEncoder.h>
 
 Axis<GM2::DIR_PWM> a(14, 27), z(26, 25);
 AxisGear coupling;
 axis::AxisMaster master(axis::MasterFeedback::MEASURED);
-axis::Quadrature aEncoder, zEncoder;
-portMUX_TYPE aMux = portMUX_INITIALIZER_UNLOCKED, zMux = portMUX_INITIALIZER_UNLOCKED;
-void ARDUINO_ISR_ATTR aISR() {
-    portENTER_CRITICAL_ISR(&aMux); aEncoder.update(digitalRead(34), digitalRead(35)); portEXIT_CRITICAL_ISR(&aMux);
-}
-void ARDUINO_ISR_ATTR zISR() {
-    portENTER_CRITICAL_ISR(&zMux); zEncoder.update(digitalRead(32), digitalRead(33)); portEXIT_CRITICAL_ISR(&zMux);
-}
-uint32_t readA(void*) {
-    portENTER_CRITICAL(&aMux); uint32_t count = aEncoder.readUnsafe(); portEXIT_CRITICAL(&aMux); return count;
-}
-uint32_t readZ(void*) {
-    portENTER_CRITICAL(&zMux); uint32_t count = zEncoder.readUnsafe(); portEXIT_CRITICAL(&zMux); return count;
-}
+axis::PcntEncoder aEncoder, zEncoder;
 void stopMaster(axis::SyncError, void*) { a.emergencyStop(); }
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
@@ -29,12 +18,10 @@ void setup() {
     Serial.begin(115200);
     pinMode(34, INPUT); pinMode(35, INPUT);
     pinMode(32, INPUT_PULLUP); pinMode(33, INPUT_PULLUP);
-    aEncoder.begin(digitalRead(34), digitalRead(35)); zEncoder.begin(digitalRead(32), digitalRead(33));
-    attachInterrupt(digitalPinToInterrupt(34), aISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(35), aISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(32), zISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(33), zISR, CHANGE);
-    a.attachEncoder(readA); z.attachEncoder(readZ);
+    ESP_ERROR_CHECK(aEncoder.begin(34, 35));
+    ESP_ERROR_CHECK(zEncoder.begin(32, 33));
+    a.attachEncoder(axis::PcntEncoder::reader, &aEncoder);
+    z.attachEncoder(axis::PcntEncoder::reader, &zEncoder);
     axis::Pins ap, zp;
     ap.home = axis::InputPin(23); ap.emergency = axis::InputPin(22);
     zp.minLimit = axis::InputPin(18); zp.maxLimit = axis::InputPin(19);

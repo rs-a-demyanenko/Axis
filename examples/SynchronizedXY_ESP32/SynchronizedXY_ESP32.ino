@@ -1,33 +1,16 @@
+// Arduino-ESP32 3.x; hardware PCNT x4 encoders.
 // Classic ESP32 WROOM. X:Y = 1:2, one common S-curve.
 // Serial 115200: h home both axes; m move X+10/Y+20; s common stop;
 // d disable; c clear group faults; e emergency stop.
 // Encoder Y GPIO34/35 require EXTERNAL 3.3 V pull-ups if open collector.
 // GPIO16/17 may be reserved on modules with PSRAM; adapt all pins to your board.
 #include <Axis.h>
+#include <AxisPcntEncoder.h>
 
 Axis<GM2::DIR_PWM> x(26, 25), y(14, 27);
 AxisGroup<2> motion;
-axis::Quadrature xEncoder, yEncoder;
-portMUX_TYPE xMux = portMUX_INITIALIZER_UNLOCKED, yMux = portMUX_INITIALIZER_UNLOCKED;
+axis::PcntEncoder xEncoder, yEncoder;
 
-void ARDUINO_ISR_ATTR xISR() {
-    portENTER_CRITICAL_ISR(&xMux);
-    xEncoder.update(digitalRead(32), digitalRead(33));
-    portEXIT_CRITICAL_ISR(&xMux);
-}
-void ARDUINO_ISR_ATTR yISR() {
-    portENTER_CRITICAL_ISR(&yMux);
-    yEncoder.update(digitalRead(34), digitalRead(35));
-    portEXIT_CRITICAL_ISR(&yMux);
-}
-uint32_t readX(void*) {
-    portENTER_CRITICAL(&xMux); uint32_t count = xEncoder.readUnsafe(); portEXIT_CRITICAL(&xMux);
-    return count;
-}
-uint32_t readY(void*) {
-    portENTER_CRITICAL(&yMux); uint32_t count = yEncoder.readUnsafe(); portEXIT_CRITICAL(&yMux);
-    return count;
-}
 void report(axis::Result result) {
     if (Serial.availableForWrite() >= 32) Serial.println(axis::toString(result));
 }
@@ -36,13 +19,10 @@ void setup() {
     Serial.begin(115200);
     pinMode(32, INPUT_PULLUP); pinMode(33, INPUT_PULLUP);
     pinMode(34, INPUT); pinMode(35, INPUT);
-    xEncoder.begin(digitalRead(32), digitalRead(33));
-    yEncoder.begin(digitalRead(34), digitalRead(35));
-    attachInterrupt(digitalPinToInterrupt(32), xISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(33), xISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(34), yISR, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(35), yISR, CHANGE);
-    x.attachEncoder(readX); y.attachEncoder(readY);
+    ESP_ERROR_CHECK(xEncoder.begin(32, 33));
+    ESP_ERROR_CHECK(yEncoder.begin(34, 35));
+    x.attachEncoder(axis::PcntEncoder::reader, &xEncoder);
+    y.attachEncoder(axis::PcntEncoder::reader, &yEncoder);
     axis::Pins xp, yp;
     xp.minLimit = axis::InputPin(18); xp.maxLimit = axis::InputPin(19); xp.home = axis::InputPin(21);
     yp.minLimit = axis::InputPin(16); yp.maxLimit = axis::InputPin(17); yp.home = axis::InputPin(23);

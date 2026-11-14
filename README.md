@@ -22,7 +22,7 @@
 ## Возможности
 
 - **S-профиль движения** — абсолютные и относительные команды с ограничением скорости, ускорения и рывка.
-- **Обратная связь** — линейный или вращательный энкодер, декодирование A/B ×4 либо внешний счётчик.
+- **Обратная связь** — линейный или вращательный энкодер, ESP32 PCNT ×4, программное декодирование A/B ×4 либо внешний счётчик.
 - **Шаговые двигатели** — STEP/DIR, четыре фазы, полушаг и виртуальный драйвер. Масштабы шагов и энкодера задаются отдельно.
 - **Регулирование** — каскад позиции и скорости, 2-DOF PID с весами задания и удержание точки.
 - **Привязка Home** — поиск датчика, медленный повторный подход и парковка.
@@ -49,6 +49,8 @@ lib_deps =
 ## Быстрый старт
 
 Откройте [пример для Arduino Uno/Nano](examples/Linear_AVR/Linear_AVR.ino) или [ESP32](examples/Linear_ESP32/Linear_ESP32.ino). В них уже есть подключение энкодера, концевиков и команды через Serial. Настройте пины, масштаб энкодера и параметры своей механики.
+
+Примеры ESP32 используют аппаратный PCNT и требуют **Arduino-ESP32 3.x** и чип с PCNT. В переносимом `Stepper_Encoder` PCNT выбирается автоматически при наличии поддержки. [Подключение и ограничения PCNT](docs/GUIDE.md#квадратурный-декодер).
 
 Основные вызовы для настроенного объекта `machineAxis`:
 
@@ -105,7 +107,7 @@ AxisStepper<STEPPER2WIRE> x(5, 6, 7);  // STEP, DIR, EN
 | [Linear_AVR](examples/Linear_AVR/Linear_AVR.ino) | Линейная ось, Uno/Nano, рабочий ноль и управление через Serial |
 | [Stepper_OpenLoop](examples/Stepper_OpenLoop/Stepper_OpenLoop.ino) | Шаговый двигатель, положение по выданным импульсам |
 | [Stepper_Encoder](examples/Stepper_Encoder/Stepper_Encoder.ino) | Шаговый двигатель с обратной связью по энкодеру |
-| [Linear_ESP32](examples/Linear_ESP32/Linear_ESP32.ino) | Линейная ось и атомарное чтение энкодера на ESP32 |
+| [Linear_ESP32](examples/Linear_ESP32/Linear_ESP32.ino) | Линейная ось с аппаратным энкодером PCNT ×4 на ESP32 |
 | [Rotary_ESP32](examples/Rotary_ESP32/Rotary_ESP32.ino) | Углы, выбор направления и многооборотное движение |
 | [ExternalFeedback](examples/ExternalFeedback/ExternalFeedback.ino) | Адаптер внешнего счётчика и диагностики |
 | [SCurvePlotter](examples/SCurvePlotter/SCurvePlotter.ino) | Графики позиции, скорости, ускорения и рывка без оборудования |
